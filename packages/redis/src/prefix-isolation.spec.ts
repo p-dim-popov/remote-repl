@@ -1,7 +1,8 @@
 // Cross-app isolation on a shared Redis: two transports (two different APPS,
 // not two replicas of one app) over one ioredis-mock server, which models one
-// Redis. The prefix is a tenancy key on the shared medium: no prefix leaks,
-// the same prefix shares, different prefixes isolate. The wire is observed by
+// Redis. The topic prefix is what lets several apps share one medium without
+// seeing each other: no prefix leaks, the same prefix shares (instances with
+// the same prefix form one cluster), different prefixes isolate. The wire is observed by
 // an independent raw client, so the test sees exactly what another process
 // on that Redis would see.
 import RedisMock from 'ioredis-mock';
@@ -53,7 +54,7 @@ describe('cross-app isolation on a shared Redis', () => {
     }
   });
 
-  it('with the SAME prefix, the apps share the topic like replicas -- the prefix is a tenancy key, not an app id', async () => {
+  it('with the SAME prefix, the apps form one cluster and share the topic -- the prefix is not an app id', async () => {
     const shared = 'shared:';
     const wire = await observe(shared + REMOTE_REPL_TOPICS.out);
     const t = await apps(shared, shared);

@@ -78,7 +78,9 @@ contract suite's need for a live Redis was visible only as `ECONNREFUSED`.
   on the developer's Node and probing a runtime for parity are different
   modules; `npm test` stays the plain npm-workspaces delegate.
 - Static-only `dev` job to avoid the overlap. Rejected: nothing would then
-  prove the no-Redis `npm test` path.
+  prove the no-Redis `npm test` path. *Edited 2026-10-17 (issue #44): the
+  overlap itself is gone; `dev` is the only job that runs the package specs,
+  and it still runs `npm test` in full.*
 
 ## Consequences
 
@@ -86,6 +88,8 @@ contract suite's need for a live Redis was visible only as `ECONNREFUSED`.
 - A Bun or Deno regression blocks PRs and releases until fixed or dropped.
 - Runtime versions go stale until someone bumps `mise.toml`; that is the
   accepted price of a stable `main`.
-- Billed CI minutes grow by about one job per PR for the `dev` overlap.
+- Billed CI minutes grow by about one job per PR for the `dev` job. *Edited
+  2026-10-17 (issue #44): the runtime legs now run only the small consumer
+  apps, so the overlap that doubled the package specs is gone.*
 - `engines` is bumped to `>=22` in a separate minor release; Node 20 was
   never tested and is end of life.

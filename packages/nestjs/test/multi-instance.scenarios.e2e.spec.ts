@@ -64,11 +64,11 @@ describe('ownership & single execution', () => {
 });
 
 describe('lease takeover', () => {
-  // Short lease so the scenario runs in real time: heartbeat 200ms, lease
-  // 400ms (the enforced minimum of 2x heartbeat).
+  // Short lease so the scenario runs in real time: owner heartbeat 200ms,
+  // lease 400ms (the enforced minimum of 2x the owner heartbeat).
   const lease = { ownerHeartbeatInterval: 200, ownerLeaseTtl: 400 };
 
-  it('a live, heartbeating owner is never preempted, even long after the lease TTL', async () => {
+  it('a live owner that keeps sending owner heartbeats is never taken over, even long after the lease TTL', async () => {
     const pair = await bootPair(lease);
     try {
       const { a, b } = pair;
@@ -77,7 +77,7 @@ describe('lease takeover', () => {
       const first = await a.post(channel, 'const kept = 7');
       await sseB.waitFor(isDoneFor(first.commandId));
 
-      // Well past ownerLeaseTtl -- A's heartbeats must have kept the lease fresh on B.
+      // Well past ownerLeaseTtl -- A's owner heartbeats must have kept the lease fresh on B.
       await sleep(lease.ownerLeaseTtl * 3);
 
       const second = await b.post(channel, 'kept * 6');
@@ -157,14 +157,14 @@ describe('SSE replay', () => {
     );
   }, 20_000);
 
-  it('heartbeats carry the last real event id, so an idle reconnect replays nothing', async () => {
+  it('SSE pings carry the last real event id, so an idle reconnect replays nothing', async () => {
     const { a } = pair;
     const channel = 'idle';
     const live = await openSse(a.port, channel);
     const c1 = await a.post(channel, "'hello'");
     const done = await live.waitFor(isDoneFor(c1.commandId));
 
-    // Idle: wait for a heartbeat that arrives AFTER the last real event.
+    // Idle: wait for an SSE ping that arrives AFTER the last real event.
     const ping = await live.waitFor((f) => isPing(f) && live.frames.indexOf(f) > live.frames.indexOf(done));
     live.close();
     expect(ping.wireId).toBe(String(done.event.id));
@@ -174,7 +174,7 @@ describe('SSE replay', () => {
     const got = await resumed.settle(300);
     resumed.close();
     expect(got.filter((f) => !isPing(f))).toEqual([]);
-    // Even before any real event, a heartbeat echoes the client's own cursor.
+    // Even before any real event, an SSE ping echoes the client's own cursor.
     expect(got.filter(isPing).every((f) => f.wireId === ping.wireId)).toBe(true);
   }, 20_000);
 });

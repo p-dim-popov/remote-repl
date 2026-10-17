@@ -128,7 +128,11 @@ complete.
   on every route. Each app is `private`, unscoped, defines a `probe` script
   and never `build`, `test` or `typecheck` (pinned by
   `packages/nestjs/src/packaging.spec.ts`), so the root delegates skip it.
-  Add a new runtime app by copying `runtime-tests/express-app`.
+  `probe` is the dev-Node shorthand for one app (`npm run probe --workspace
+  express-app`); the loop runs the given command itself so that vitest
+  starts under the runtime being probed. Add a new runtime app by copying
+  `runtime-tests/express-app`; list it in `.changeset/config.json`'s
+  `ignore` (apps are never versioned or published).
 - **Failure attribution.** The session-layer scenarios sit under a describe
   named for the seam, `session layer (packages/core/src/session/)`: a red
   one on some runtime means the `node:repl` parity the session relies on

@@ -1,6 +1,6 @@
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { basename, dirname, join } from 'path';
 import { describe, expect, it } from 'vitest';
 
 // `npm pack --json` prints an array of pack results up to npm 11 and, from
@@ -87,7 +87,7 @@ describe('workspace layout', () => {
 
     it('is a workspace glob with at least the Express app', () => {
       expect(rootPkg().workspaces).toContain('runtime-tests/*');
-      expect(apps.map((p) => p.split('/').at(-2))).toContain('express-app');
+      expect(apps.map((p) => basename(dirname(p)))).toContain('express-app');
     });
 
     it.each(apps.map((p) => [p.slice(repoRoot.length + 1), p]))(

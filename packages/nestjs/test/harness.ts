@@ -13,7 +13,8 @@ import type { RemoteReplModuleOptions } from '../src/interfaces/remote-repl-opti
 /** A booted, listening instance plus the HTTP handle tests drive it through. */
 export interface Instance {
   port: number;
-  post(channel: string, command: string): Promise<{ status: number; commandId?: string }>;
+  /** `commandId` is the empty string when the POST was not accepted (status != 202). */
+  post(channel: string, command: string): Promise<{ status: number; commandId: string }>;
   get(path: string): Promise<{ status: number }>;
   close(): Promise<void>;
 }
@@ -36,7 +37,7 @@ export const bootInstance = async (
       const res = await request(server)
         .post(`/repl/${encodeURIComponent(channel)}`)
         .send({ command });
-      return { status: res.status, commandId: res.body?.commandId };
+      return { status: res.status, commandId: res.body?.commandId ?? '' };
     },
     async get(path) {
       const res = await request(server).get(path);
@@ -184,7 +185,7 @@ export const openSse = (
 export const isOutputContaining = (text: string) => (f: Frame) =>
   f.event.type === 'output' && String(f.event.data).includes(text);
 
-export const isDoneFor = (commandId: string | undefined) => (f: Frame) =>
+export const isDoneFor = (commandId: string) => (f: Frame) =>
   f.event.type === 'system' &&
   f.event.commandId === commandId &&
   (f.event.data as { done?: boolean })?.done === true;
