@@ -2,20 +2,22 @@ name: Verify
 
 # The verification module (ADR 0006). This is the ONLY place the recipe
 # exists: pr.yml calls it on every pull request, release.yml calls it on every
-# push to main and publishes only behind it. Two jobs, two questions:
-#  - dev:     the contributor's laptop in CI (Node from mise.toml, no Redis).
-#             "Does `npm test` pass without Docker?" The contract suite skips
-#             itself there (packages/nestjs/test/contract/redis-preflight.ts).
-#  - runtime: every supported runtime, with Redis, the full suite.
-#             "Does the product work on this runtime?" All legs block.
-# The fast specs run in both; that overlap is deliberate (the ADR says why).
+# push to main and publishes only behind it. Two suites, two jobs, two
+# questions, no Redis anywhere:
+#  - dev:     the contributor's laptop in CI (Node from mise.toml). Typecheck,
+#             schema check, build and `npm test`: the unit + integration
+#             suite, nothing skips, no Docker.
+#             "Does `npm test` pass on the dev Node?"
+#  - runtime: every supported runtime. Build, then `npm run test:runtime`:
+#             the consumer apps under runtime-tests/* against the built dist/.
+#             "Can an app on this runtime use what we ship?" All legs block.
 
 on:
   workflow_call:
 
 jobs:
   dev:
-    name: dev (mise node, no Redis)
+    name: dev (mise node)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +34,7 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Test (the contract suite skips itself, no Redis here)
+      - name: Test (unit + integration, zero skips)
         run: npm test
 
   runtime:
@@ -44,8 +46,9 @@ jobs:
         include:
           # Node legs pick their version per command with `mise x` (even the
           # one matching mise.toml, so the leg name stays true when the dev
-          # Node moves on); Bun and Deno come from mise.toml. `npm ci` ran once on the dev Node: the
-          # native binaries are per platform, not per Node version.
+          # Node moves on); Bun and Deno come from mise.toml. `npm ci` ran
+          # once on the dev Node: the native binaries are per platform, not
+          # per Node version.
           - runtime: node-22
             vitest: mise x node@22 -- npx vitest run
           - runtime: node-24
@@ -60,28 +63,13 @@ jobs:
           # after a fully green run; the threads pool exits cleanly.
           - runtime: deno
             vitest: deno run -A npm:vitest run --pool=threads
-    # Real Redis for the contract suite (packages/nestjs/test/contract): two
-    # app instances over the shipped ioredis and node-redis transports.
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-    env:
-      REDIS_URL: redis://127.0.0.1:6379
-      # The contract suite must RUN here, never skip.
-      REDIS_REQUIRED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
 
+      # The runtime suite resolves the packages' built dist/, so build first.
       - name: Build
         run: npm run build
 
-      - name: Full suite (session canary, every package, attribution)
+      - name: Runtime suite (runtime-tests/* against dist/)
         run: npm run test:runtime -- ${{ matrix.vitest }}

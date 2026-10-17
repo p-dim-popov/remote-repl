@@ -28,22 +28,26 @@ that lens — see "Security invariants" below.
 ## Setup, build, test
 
 The repo is an npm-workspaces monorepo: the root `package.json` is private
-with `workspaces: ["packages/*"]`, and every root script delegates to every
-workspace. Run everything from the workspace root.
+with `workspaces: ["packages/*", "runtime-tests/*"]`, and the root
+`build` / `test` / `typecheck` scripts delegate to every workspace with
+`--if-present`, so in effect they run over `packages/*` only (the consumer
+apps under `runtime-tests/*` define none of those three scripts, see
+"Runtime support"). Run everything from the workspace root.
 
 - Runtimes: `mise install` (reads the root `mise.toml`, the single pin for
   the dev Node, Bun and Deno; CI installs from the same file, ADR 0006).
 - Install: `npm install` (at the root; `node_modules` is hoisted there)
 - Run tests: `npm test` (Vitest — unit specs under `packages/*/src/`, e2e under
-  `packages/nestjs/test/`). `packages/nestjs/test/contract/` needs a reachable
-  Redis (`docker run -d -p 6379:6379 redis:7-alpine`; override the address
-  with `REDIS_URL`): without one it SKIPS with one warning per spec file
-  (`test/contract/redis-preflight.ts` declares that requirement once); with
-  `REDIS_REQUIRED=1` (set in CI's runtime legs) it fails with one message.
-- Probe a runtime: `npm run test:runtime -- <vitest command>` runs
-  `scripts/runtime-suite.mjs`: the session canary first, then every
-  package's suite through that command, then the attribution report (see
-  "Runtime support"). E.g. `npm run test:runtime -- bun --bun x vitest run`.
+  `packages/nestjs/test/`). This is the unit + integration suite: dev Node
+  only, no Docker, no Redis, nothing skips. Multi-instance behaviour is
+  pinned on the in-memory transport in `packages/nestjs/test/`; the Redis
+  transports' topic prefix is pinned over `ioredis-mock` in
+  `packages/redis/src/prefix-isolation.spec.ts`.
+- Runtime suite: `npm run test:runtime -- <vitest command>` runs
+  `scripts/runtime-tests.mjs`, a short loop that runs the given command in
+  each consumer app under `runtime-tests/*` (see "Runtime support"). The
+  apps resolve the packages' built `dist/`, so build first. E.g.
+  `npm run test:runtime -- bun --bun x vitest run`.
 - Build: `npm run build` (each package emits its own `dist/` via `tsc`;
   `packages/core` must produce `dist/index.js`, `dist/index.d.ts` and
   `dist/ui/vs/`, the Monaco copy made by its `scripts/copy-monaco.mjs`;
@@ -60,7 +64,7 @@ workspace. Run everything from the workspace root.
   use `ts-node`, which resolves `@remote-repl/core` from its built `dist/` —
   build first.
 - One package only: `npm run <script> --workspace <package-name>`
-  (e.g. `npx vitest run test/contract` from inside `packages/nestjs`).
+  (e.g. `npx vitest run test/` from inside `packages/nestjs`).
 
 How one package finds another (`packages/nestjs` → `@remote-repl/core`;
 `packages/redis` and `packages/express` → `@remote-repl/core`;
@@ -96,28 +100,44 @@ complete.
   0006): Node 22, 24 and 26, Bun and Deno. `.github/workflows/verify.yml` is
   the one verification recipe; `pr.yml` calls it on every pull request and
   `release.yml` calls it on every push to `main` and publishes only behind
-  it. Its `runtime` matrix runs the full suite (unit + contract + e2e, Redis
-  service on every leg, `REDIS_REQUIRED=1`) on each runtime through
-  `npm run test:runtime -- <vitest command>`, because the root `npm test`
-  would run vitest under Node: `bun --bun x vitest run` (the `--bun` flag is
-  required or bunx honours vitest's node shebang and runs it on Node),
-  `deno run -A npm:vitest run --pool=threads` (the default forks pool exits
-  1 with a BrokenPipe on Deno after a green run), `mise x node@22 -- npx
-  vitest run` for the other Node lines. Its `dev` job is the contributor's
-  laptop: the Node from `mise.toml`, no Redis, plain `npm test` (the contract
-  suite skips itself there). A red runtime leg blocks: fix it at the session
-  seam or drop the runtime from the matrix, `mise.toml` and this list. Never
-  patch the engine to chase a runtime. `mise.toml` pins the dev Node by major
-  line and Bun and Deno exactly; bump it deliberately.
-- **Failure attribution.** `scripts/runtime-suite.mjs` runs the session spec
-  (`packages/core/src/session/repl-session.spec.ts`) FIRST, alone: it is the
-  `node:repl` parity canary (sentinel prompt, continuation prompt,
-  buffered-command state are verified on Node only). A red canary means
-  "session layer": do not weaken the spec; the drop-in point is the session
-  seam in `packages/core/src/session/` (a runtime-specific session
-  implementation replaces `ReplSession` there, the engine is untouched). A
-  red full suite with a green canary is attributed elsewhere. The script
-  writes this attribution to the step summary.
+  it. Two suites, each with one home and one command. Its `dev` job is the
+  contributor's laptop: the Node from `mise.toml`, typecheck, schema check,
+  build and plain `npm test` (unit + integration, zero skips, no Docker).
+  Its `runtime` matrix builds, then runs ONLY the runtime suite on each
+  runtime through `npm run test:runtime -- <vitest command>`, because the
+  root `npm test` would run vitest under Node: `bun --bun x vitest run` (the
+  `--bun` flag is required or bunx honours vitest's node shebang and runs it
+  on Node), `deno run -A npm:vitest run --pool=threads` (the default forks
+  pool exits 1 with a BrokenPipe on Deno after a green run), `mise x node@22
+  -- npx vitest run` for the other Node lines. No workflow starts a Redis
+  service. A red runtime leg blocks: fix it at the session seam or drop the
+  runtime from the matrix, `mise.toml` and this list. Never patch the engine
+  to chase a runtime. `mise.toml` pins the dev Node by major line and Bun and
+  Deno exactly; bump it deliberately.
+- **The runtime suite is consumer apps, not the package specs.**
+  `runtime-tests/*` is a workspace glob of small apps; `runtime-tests/express-app`
+  is a plain Express app that depends on `@remote-repl/express` and
+  `@remote-repl/core` through the workspace links with NO vitest alias, so
+  it resolves each package's built `dist/` exactly like an installed
+  consumer (the suite goes red when `dist/` is missing). Vitest runs
+  in-process under the given runtime; the app listens on a real port and the
+  scenarios use the global `fetch` over HTTP: the session-layer scenarios
+  (multi-line input, top-level `await`, a synchronous throw followed by a
+  working next command), `Last-Event-ID` replay, the UI page and one Monaco
+  asset byte-compared with `dist/ui/vs`, and a disabled engine answering 404
+  on every route. Each app is `private`, unscoped, defines a `probe` script
+  and never `build`, `test` or `typecheck` (pinned by
+  `packages/nestjs/src/packaging.spec.ts`), so the root delegates skip it.
+  Add a new runtime app by copying `runtime-tests/express-app`.
+- **Failure attribution.** The session-layer scenarios sit under a describe
+  named for the seam, `session layer (packages/core/src/session/)`: a red
+  one on some runtime means the `node:repl` parity the session relies on
+  (sentinel prompt, continuation prompt, buffered-command state, all verified
+  on Node only in `packages/core/src/session/repl-session.spec.ts`) differs
+  there. Do not weaken the spec; the drop-in point is the session seam (a
+  runtime-specific session implementation replaces `ReplSession` there, the
+  engine is untouched). A red scenario outside that describe is attributed
+  elsewhere.
 - **Portability fences.** `packages/core/src/runtime-portability.spec.ts`
   forbids the `NodeJS.*` type namespace in core sources (use
   `ReturnType<typeof setTimeout>`); `src/ui/monaco-assets.ts` guards
@@ -134,7 +154,8 @@ changesets), `.github/workflows/`, `README.md`
 short `README.md` that links back to it), `CHANGELOG.md` (pre-split history
 only; per-package `CHANGELOG.md` files are generated from here on),
 `CONTRIBUTING.md`, `GLOSSARY.md` (the ubiquitous language), `mise.toml` (the
-runtime pin), `scripts/runtime-suite.mjs` (the runtime probe), `docs/adr/`
+runtime pin), `scripts/runtime-tests.mjs` (the runtime suite loop),
+`runtime-tests/` (the consumer apps it runs, see "Runtime support"), `docs/adr/`
 (architecture decision records: `0001` separate packages over subpath exports,
 `0002` no rxjs in core, `0003` no wire protocol version, `0004` the
 `remote-repl` name and why the web UI is one client surface, not the product,
@@ -282,10 +303,11 @@ change or that spec goes red. Packages live under `packages/`:
   `REMOTE_REPL_CLOCK`. It exports ONLY its own API: no `./redis`
   subpath, no `typesVersions`, no redis-client peers (`src/packaging.spec.ts`
   pins that, together with `files: ["dist"]`, the absence of a `bin` in every
-  workspace package, the workspace layout and the `skills/` frontmatter); `@remote-repl/redis` is a devDependency for `test/contract/`
-  only. rxjs is a peer of THIS package (the Observable adaptation lives
-  here), never of
-  core. Paths below are relative to it.
+  workspace package, the workspace layout, the `runtime-tests/*` glob and
+  the `skills/` frontmatter). It has no devDependency on `@remote-repl/redis`
+  or `@remote-repl/express`: nothing in its tests needs a Redis transport or
+  an Express host. rxjs is a peer of THIS package (the Observable adaptation
+  lives here), never of core. Paths below are relative to it.
   - `src/remote-repl.service.ts` — `RemoteReplService extends RemoteReplEngine`:
     the thin Nest face of core's engine. DI construction (passes
     `new Logger('RemoteReplService')`), `onModuleInit`/`onModuleDestroy` →
@@ -315,21 +337,24 @@ change or that spec goes red. Packages live under `packages/`:
   - `src/interfaces/remote-repl-options.interface.ts` — `RemoteReplModuleOptions`
     (extends core's `RemoteReplOptions`), `RemoteReplTransportConfig`,
     `RemoteReplModuleExtras`. `src/constants.ts` — the Nest DI tokens only.
-  - `example/` — a runnable host app. `test/` — the two-instance e2e (in-memory
-    transport) and `test/contract/` — the contract suite: two real Nest
-    instances on a REAL Redis (`REDIS_URL`, default `redis://127.0.0.1:6379`),
-    every scenario run once per transport from `@remote-repl/redis`. It pins
-    the observable multi-instance behavior (ownership, lease takeover, SSE
-    replay, serialization, `enabled`, and cross-app isolation: no prefix
-    leaks, same prefix shares, different prefixes isolate) and must stay
-    green through any refactor. `test/contract/cross-framework.spec.ts` reuses
-    the same harness (`frameworks`: `bootInstance` for Nest,
-    `bootExpressInstance` for a plain Express app via `@remote-repl/express`,
-    aliased to its source in `vitest.config.ts` like core) to run one NestJS
-    and one Express instance on the shared Redis, per transport and per owner
-    framework: single execution + cross-framework relay, claim/heartbeat on
-    the raw `sys` topic, lease takeover when the owning framework dies, and
-    `Last-Event-ID` replay against the other framework.
+  - `example/` — a runnable host app. `test/` — the multi-instance e2e
+    specs, two real, listening Nest apps on one in-memory transport:
+    `test/multi-instance.e2e.spec.ts` is the minimal cross-instance proof
+    and `test/multi-instance.scenarios.e2e.spec.ts` pins the observable
+    multi-instance behaviour at the HTTP + SSE seam (ownership and single
+    execution, a live owner is never preempted, takeover after the lease
+    expires, `Last-Event-ID` replay, idle reconnect replays nothing,
+    per-channel serialization, `enabled` 404 with no traffic on the
+    transport). `test/harness.ts` boots the apps and reads SSE; each app
+    gets its own view of the shared in-memory transport (closing one view
+    silences only that app's handlers), which is how a scenario kills one
+    instance while the other keeps running. These must stay green through
+    any refactor. There is no cross-framework spec: both framework packages
+    sit on the same engine and shared handler layer, and the Express router
+    suite mirrors the controller spec, so wire compatibility is proven by
+    construction. The Redis transports' prefix semantics (no prefix leaks,
+    same prefix shares, different prefixes isolate) are pinned in
+    `packages/redis/src/prefix-isolation.spec.ts` over `ioredis-mock`.
 - `packages/nestjs-web-repl/` — the `nestjs-web-repl` package: the legacy
   name kept alive as a shim so 2.3.x installs resolve with zero code changes.
   Deliberately NOT under the `@remote-repl` scope. `src/index.ts` re-exports

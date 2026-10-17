@@ -65,15 +65,59 @@ describe('workspace layout', () => {
     expect(process.cwd().endsWith(join('packages', 'nestjs'))).toBe(true);
   });
 
-  it('has no package with a bin field anywhere in the workspace', () => {
-    const packagesDir = join(repoRoot, 'packages');
-    const manifests = readdirSync(packagesDir)
-      .map((d) => join(packagesDir, d, 'package.json'))
+  const manifestsUnder = (dir: string) =>
+    readdirSync(join(repoRoot, dir))
+      .map((d) => join(repoRoot, dir, d, 'package.json'))
       .filter((p) => existsSync(p));
+
+  it('has no package with a bin field anywhere in the workspace', () => {
+    const manifests = [...manifestsUnder('packages'), ...manifestsUnder('runtime-tests')];
     expect(manifests.length).toBeGreaterThan(0);
     for (const p of [join(repoRoot, 'package.json'), ...manifests]) {
       expect(read(p).bin, p).toBeUndefined();
     }
+  });
+
+  // runtime-tests/* are consumer apps, not packages: private, driven only by
+  // `npm run test:runtime` through their `probe` script, and never picked up
+  // by the root `build` / `test` / `typecheck` delegates (which run
+  // `--workspaces --if-present`, so an app without those scripts is skipped).
+  describe('runtime-tests/* (consumer apps)', () => {
+    const apps = manifestsUnder('runtime-tests');
+
+    it('is a workspace glob with at least the Express app', () => {
+      expect(rootPkg().workspaces).toContain('runtime-tests/*');
+      expect(apps.map((p) => p.split('/').at(-2))).toContain('express-app');
+    });
+
+    it.each(apps.map((p) => [p.slice(repoRoot.length + 1), p]))(
+      '%s is private, unscoped, has a probe script and none of build/test/typecheck',
+      (_rel, p) => {
+        const app = read(p);
+        expect(app.private).toBe(true);
+        expect(app.name.startsWith('@')).toBe(false);
+        expect(app.scripts.probe).toBeDefined();
+        expect(Object.keys(app.scripts)).not.toContain('build');
+        expect(Object.keys(app.scripts)).not.toContain('test');
+        expect(Object.keys(app.scripts)).not.toContain('typecheck');
+      },
+    );
+
+    it('the root delegates skip workspaces without the script', () => {
+      for (const name of ['build', 'test', 'typecheck']) {
+        expect(rootPkg().scripts[name]).toContain('--workspaces --if-present');
+      }
+    });
+
+    it('no app aliases a package to its source (it must resolve dist/)', () => {
+      for (const p of apps) {
+        const dir = p.slice(0, -'package.json'.length);
+        for (const cfg of ['vitest.config.ts', 'vitest.config.mts', 'vitest.config.js', 'vite.config.ts']) {
+          if (!existsSync(join(dir, cfg))) continue;
+          expect(readFileSync(join(dir, cfg), 'utf8')).not.toMatch(/alias/);
+        }
+      }
+    });
   });
 });
 

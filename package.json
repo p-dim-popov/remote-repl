@@ -4,16 +4,17 @@
   "description": "Workspace root for the remote-repl monorepo (see packages/).",
   "license": "MIT",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "runtime-tests/*"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build --workspaces",
-    "test": "npm test --workspaces",
-    "test:runtime": "node scripts/runtime-suite.mjs",
-    "typecheck": "npm run typecheck --workspaces",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "test:runtime": "node scripts/runtime-tests.mjs",
+    "typecheck": "npm run typecheck --workspaces --if-present",
     "example": "npm run example --workspace @remote-repl/nestjs",
     "example:express": "npm run example --workspace @remote-repl/express",
     "schema:check": "npm run schema:check --workspace @remote-repl/core",
