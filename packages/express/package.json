@@ -1,6 +1,6 @@
 {
   "name": "@remote-repl/express",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Express router for remote-repl: mounts the live REPL (command endpoint, SSE stream, Monaco UI) onto any Express app.",
   "license": "MIT",
   "main": "dist/index.js",
