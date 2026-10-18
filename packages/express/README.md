@@ -42,6 +42,14 @@ engine refuses commands and streams, and the router reads `engine.enabled` and
 returns 404 on every route. One process needs no transport. For several
 replicas, pass a transport from `@remote-repl/redis`.
 
+## Runtimes
+
+Node 22, 24 and 26, Bun and Deno are supported and release-blocking. A plain
+Express app that depends on this package (`runtime-tests/express-app` in the
+repository) runs against the published build on every one of them in CI:
+multi-line input, top-level `await`, error recovery, `Last-Event-ID` replay,
+the UI and Monaco assets, and the 404 rail when `enabled` is false.
+
 Full documentation, the options table and the security notes are in the
 repository README: https://github.com/p-dim-popov/remote-repl#readme
 

@@ -16,7 +16,7 @@ const packageDirs = readdirSync(join(repoRoot, 'packages'));
 // `test/...`, `example/...`, `scripts/...`, `schema/...`) pass when at least
 // one package contains them. Globs are checked up to the first `*`; build
 // outputs (`dist/`) and generic placeholders (`<name>`) are skipped.
-const ROOT_PREFIX = /^(packages|docs|skills|examples|\.github)\//;
+const ROOT_PREFIX = /^(packages|runtime-tests|docs|skills|examples|\.github)\//;
 const PACKAGE_PREFIX = /^(src|test|example|scripts|schema)\//;
 const PATH_CHARS = /^[\w./*-]+$/;
 

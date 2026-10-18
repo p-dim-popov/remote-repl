@@ -334,8 +334,12 @@ your session. The engine solves this with an **ownership + fan-out** protocol:
   **last-claim-wins** (see [Limitations](#limitations)).
 
 The protocol is framework-agnostic. A NestJS instance and an Express instance
-can share one transport and one set of channels. The contract suite in
-`packages/nestjs/test/contract/` proves this on a real Redis.
+can share one transport and one set of channels: both packages sit on the same
+engine and the same shared handler layer, and the Express router suite mirrors
+the NestJS controller spec. The multi-instance scenarios in
+`packages/nestjs/test/` pin ownership, the lease, replay and serialization on
+the in-memory transport; the Redis transports' prefix semantics are pinned in
+`packages/redis`.
 
 When you give no transport, the engine uses `RemoteReplInMemoryTransport`. The
 `RemoteReplEngine` constructor, `createRemoteReplEngine` and
@@ -667,12 +671,14 @@ The split into the `@remote-repl` packages followed the same process.
 We tell you this so that you can judge the code on its merits and not guess at its
 origins. If you are skeptical of AI-written code, look at these things:
 
-- **The tests.** A thorough automated suite. It includes a two-instance end-to-end
-  test that proves cross-instance command routing and output fan-out, and a
-  contract suite on a real Redis that runs a NestJS instance next to an Express
-  instance. It also includes an execution-proof test that resolves a real
-  provider through the live REPL context. `npm test`, `npm run build`, the
-  typecheck and the protocol schema check all run green in CI.
+- **The tests.** A thorough automated suite. It includes two-instance end-to-end
+  scenarios that prove cross-instance command routing, output fan-out, the
+  owner lease and SSE replay, and a runtime suite of consumer apps
+  (`runtime-tests/`) that drive the built packages over real HTTP on Node 22,
+  24 and 26, Bun and Deno. It also includes an execution-proof test that
+  resolves a real provider through the live REPL context. `npm test`,
+  `npm run build`, the typecheck and the protocol schema check all run green
+  in CI.
 - **The commit history.** The TDD trail is preserved: failing test,
   implementation, fixes. It includes several rounds where review caught real
   defects. The hardest two were `node:repl` completion detection on modern Node,
