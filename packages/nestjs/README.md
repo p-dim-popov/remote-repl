@@ -16,7 +16,7 @@ npm install @remote-repl/nestjs
 ```
 
 `@nestjs/common`, `@nestjs/core` (`^10 || ^11`) and `rxjs` are peer
-dependencies. Node 20+ is required. Existing apps can keep the
+dependencies. Node 22+ is required. Existing apps can keep the
 `nestjs-web-repl` package name: it is a shim that re-exports this package.
 
 ## Usage

@@ -31,7 +31,7 @@ a thin shim over the `@remote-repl` packages. See [Packages](#packages).
 | `@remote-repl/redis`  | The Redis transports (`ioredis` and `node-redis`) for several instances, with an optional topic `prefix`.          | `npm install @remote-repl/redis` plus `ioredis` or `redis` |
 | `nestjs-web-repl`     | The legacy name. A shim: the 2.3.x names as `@deprecated` aliases of `@remote-repl/nestjs`, and of `@remote-repl/redis` under `nestjs-web-repl/redis`. See [Migrating from nestjs-web-repl](#migrating-from-nestjs-web-repl). | `npm install nestjs-web-repl`                       |
 
-All packages require Node 20+. The NestJS package requires NestJS 10 or 11. The
+All packages require Node 22+. The NestJS package requires NestJS 10 or 11. The
 Express package requires Express 4.16+ or 5. The Redis clients are optional peer
 dependencies: install the one that you use.
 
@@ -576,11 +576,11 @@ instance stops, its leases expire and the cluster is whole again
 
 ## Runtime support
 
-CI runs the full suite on Node 22, 24 and 26, on Bun and on Deno, and a red
-run on any of them blocks a release. The exact Bun and Deno versions are pinned
-in the repo's `mise.toml`. The declared minimum (`engines`) is still Node 20,
-which CI does not run. The one file that depends on Node
-internals is the `node:repl` session layer. The engine talks to it through a
+Node 22 or later is required (`engines`). CI runs the runtime suite (the
+consumer apps under `runtime-tests/`, against the built packages) on Node 22,
+24 and 26, on Bun and on Deno, and a red run on any of them blocks a release.
+The exact Bun and Deno versions are pinned in the repo's `mise.toml`. The one
+file that depends on Node internals is the `node:repl` session layer. The engine talks to it through a
 session interface, so a runtime-specific session can replace it without engine
 changes.
 
