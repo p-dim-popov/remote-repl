@@ -15,7 +15,7 @@ output stream and a Monaco browser UI, backed by the framework-free engine in
 npm install @remote-repl/express
 ```
 
-`express` (`^4.16 || ^5`) is a peer dependency. Node 20+ is required.
+`express` (`^4.16 || ^5`) is a peer dependency. Node 22+ is required.
 
 ## Usage
 
