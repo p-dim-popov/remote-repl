@@ -1,6 +1,6 @@
 {
   "name": "@remote-repl/redis",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Redis pub/sub transports (ioredis, node-redis) for remote-repl, with optional topic prefix for tenancy on a shared Redis.",
   "license": "MIT",
   "main": "dist/index.js",
@@ -37,7 +37,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@remote-repl/core": "^1.0.1"
+    "@remote-repl/core": "^1.1.0"
   },
   "peerDependencies": {
     "ioredis": "^5",

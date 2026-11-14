@@ -1,6 +1,6 @@
 {
   "name": "nestjs-web-repl",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "description": "Live NestJS REPL over HTTP (SSE + Monaco UI). Compatibility shim: re-exports @remote-repl/nestjs, and @remote-repl/redis under nestjs-web-repl/redis.",
   "keywords": [
     "nestjs",
@@ -64,8 +64,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@remote-repl/nestjs": "^1.0.1",
-    "@remote-repl/redis": "^1.0.1"
+    "@remote-repl/nestjs": "^1.1.0",
+    "@remote-repl/redis": "^1.1.0"
   },
   "peerDependencies": {
     "@nestjs/common": "^10 || ^11",
