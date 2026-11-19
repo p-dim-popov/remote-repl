@@ -1,5 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { createRemoteReplEngine, createRemoteReplRouter } from '../src';
+import { createRemoteRepl } from '../src';
 import { CatService } from './cat.service';
 
 // Off by default: the REPL executes arbitrary code, so it must be opted into
@@ -23,19 +23,20 @@ function requireReplToken(req: Request, res: Response, next: NextFunction): void
 
 async function bootstrap(): Promise<void> {
   const catService = new CatService();
-  const engine = createRemoteReplEngine({
-    options: { enabled, instanceId: process.env.INSTANCE_ID },
-    // No `transport`: the in-memory default, correct for this one process.
-    // What every REPL session sees as globals.
-    context: { catService },
-  });
-  await engine.start(); // no-op (subscribes to nothing) when disabled
-
   const app = express();
   app.get('/', (_req, res) => {
     res.type('text/plain').send('express example up; the REPL lives under /repl');
   });
-  app.use('/repl', requireReplToken, createRemoteReplRouter({ engine })); // 404s everything when the engine is disabled
+
+  const repl = createRemoteRepl({
+    enabled,
+    instanceId: process.env.INSTANCE_ID,
+    // No `transport`: the in-memory default, correct for this one process.
+    // What every REPL session sees as globals, next to `app`.
+    context: { catService },
+  });
+  app.use('/repl', requireReplToken, repl); // 404s everything when disabled
+  await repl.ready; // the engine starts on its own; a failed start fails the boot
 
   const server = app.listen(port, () => {
     // eslint-disable-next-line no-console
@@ -45,12 +46,14 @@ async function bootstrap(): Promise<void> {
     );
   });
 
-  const shutdown = (): void => {
+  // Stop the REPL first: it ends the open SSE streams, which `server.close()`
+  // waits for.
+  const shutdown = async (): Promise<void> => {
+    await repl.close();
     server.close();
-    void engine.stop();
   };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', () => void shutdown());
+  process.once('SIGTERM', () => void shutdown());
 }
 
 void bootstrap();

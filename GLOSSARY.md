@@ -20,7 +20,18 @@ _Avoid_: session (that is what a channel contains), room
 **Session**:
 The live REPL process behind one channel on its owner instance. A session
 exists only on the owner and dies with it.
-_Avoid_: REPL, context
+_Avoid_: REPL, context (the globals a session starts with)
+
+**Context**:
+The set of globals a session starts with, built once per session on the owner.
+The host app supplies it, and a framework package adds the native objects of
+its framework.
+_Avoid_: scope, globals (bare), environment
+
+**Helper**:
+A function that the NestJS package puts in the context to work with the DI
+container, for example `get`, `$` and `resolve`. Express has no helpers.
+_Avoid_: native function, built-in, command
 
 **Instance**:
 One running process of an application that embeds the engine. Replicas behind a
@@ -50,8 +61,9 @@ _Avoid_: adapter (the historical name; `nestjs-web-repl` keeps it only in its
 deprecated aliases), bus, broker
 
 **Framework package**:
-The package that wires the engine to one web framework's HTTP routes, for
-example the NestJS or Express package. It does HTTP wiring only.
+The package that wires the engine to one web framework, for example the NestJS
+or Express package: its HTTP routes and the native objects of the framework in
+the context. It contains no engine or route logic.
 _Avoid_: adapter (the historical name), integration, plugin, binding
 
 **Shared handler layer**:

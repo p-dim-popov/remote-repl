@@ -56,9 +56,12 @@ describe('README.md', () => {
     expect(readme).toContain(`\`${name}\``);
   });
 
-  it('gives the Express quick start with createRemoteReplEngine + createRemoteReplRouter', () => {
-    expect(readme).toContain('createRemoteReplEngine(');
-    expect(readme).toContain('createRemoteReplRouter(');
+  it('gives the Express quick start with createRemoteRepl, and still documents the lower-level pair', () => {
+    const quickStart = readme.slice(readme.indexOf('### Express\n'), readme.indexOf('## Endpoints'));
+    expect(quickStart).toContain('createRemoteRepl(');
+    expect(quickStart).toContain('await repl.close()');
+    expect(readme).toContain('createRemoteReplEngine');
+    expect(readme).toContain('createRemoteReplRouter({ engine })');
   });
 
   it('uses the same skills.sh install commands as the skills', () => {

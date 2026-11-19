@@ -1,6 +1,6 @@
 ---
 name: remote-repl-express
-description: Use when an Express app exposes a live REPL via @remote-repl/express: creating the engine and router, choosing the context the sessions see, gating it with an env flag, running replicas over Redis, or driving the POST/SSE routes to inspect the running app.
+description: Use when an Express app exposes a live REPL via @remote-repl/express: mounting createRemoteRepl(), choosing the context the sessions see next to `app`, gating it with an env flag, starting and stopping it, running replicas over Redis, or driving the POST/SSE routes to inspect the running app.
 ---
 
 # remote-repl-express
@@ -15,12 +15,14 @@ same protocol, so a NestJS replica and an Express replica can share one Redis.
 Full reference (options, exports, securing it): the repository README,
 https://github.com/p-dim-popov/remote-repl#readme.
 
-Two exports:
+One call sets it up:
 
 | Export                                   | Purpose                                                                 |
 | ---------------------------------------- | ----------------------------------------------------------------------- |
-| `createRemoteReplEngine({ options, context \| buildContext, transport?, logger? })` | Builds the `RemoteReplEngine`. `transport` defaults to in-memory. The caller owns `start()` / `stop()`. |
-| `createRemoteReplRouter({ engine })`           | An Express `Router` with the five routes; mount it wherever you want the base path. It reads `enabled` from the engine. |
+| `createRemoteRepl({ enabled, …engine options, context \| buildContext, transport?, logger?, autoStart? })` | Builds the engine, starts it, and returns an Express `Router` with the five routes, plus `ready`, `start()`, `close()` and `engine`. Every session sees `app`, the Express app that mounts it. `transport` defaults to in-memory. |
+
+The lower-level pair it is built on, `createRemoteReplEngine` and
+`createRemoteReplRouter`, stays available (see "When you need more").
 
 ## Security first — read before wiring
 
@@ -30,55 +32,65 @@ router:
 
 - Gate it behind an environment flag so it is OFF by default:
   `const enabled = process.env.REPL_ENABLED === 'true'`, and pass it to
-  `createRemoteReplEngine` in `options`. The router derives its own 404 gate from
-  `engine.enabled`; there is no second flag to keep in step.
+  `createRemoteRepl` as `enabled`. The engine and the routes both read that
+  one flag; there is no second flag to keep in step.
 - Enable it in production only behind your own authentication or network
   restriction in front of the routes. Put your auth middleware **before** the
-  router in the same `app.use(path, auth, router)` call.
-- A disabled engine never subscribes to the transport (`start()` is a no-op)
-  and a disabled router 404s every route. Keep it that way.
+  router in the same `app.use(path, auth, repl)` call.
+- A disabled REPL never subscribes to the transport (the start is a no-op)
+  and 404s every route, before any other answer. Keep it that way.
 
 ## Wire it up
 
 ```ts
 import express from 'express';
-import { createRemoteReplEngine, createRemoteReplRouter } from '@remote-repl/express';
+import { createRemoteRepl } from '@remote-repl/express';
 
 const enabled = process.env.REPL_ENABLED === 'true';
 
-const engine = createRemoteReplEngine({
-  options: { enabled },
-  // no `transport`: the in-memory default, correct for one process; see Redis below
-  context: { db, userService }, // the globals every session sees
-});
-await engine.start(); // no-op when disabled
-
 const app = express();
-app.use('/repl', requireAdmin, createRemoteReplRouter({ engine }));
-//          ^ mount path = base path      ^ your auth middleware, in front
+const repl = createRemoteRepl({
+  enabled,
+  // no `transport`: the in-memory default, correct for one process; see Redis below
+  context: { db, userService }, // the globals every session sees, next to `app`
+});
+app.use('/repl', requireAdmin, repl);
+//          ^ mount path = base path  ^ your auth middleware, in front
+await repl.ready; // optional: make a failed start fail the boot
 
 const server = app.listen(3000);
-process.once('SIGTERM', () => {
+process.once('SIGTERM', async () => {
+  await repl.close(); // first: it ends the open SSE streams that server.close() waits for
   server.close();
-  void engine.stop();
 });
 ```
 
 Key points:
 
-- **Mount path is the base path.** `app.use('/repl', router)` gives
+- **Mount path is the base path.** `app.use('/repl', repl)` gives
   `/repl`, `/repl/:channel`, `/repl/:channel/ui`, `/repl/:channel/vs/*`. The
   landing redirect uses `req.originalUrl`, so nested mounts and prefixes work.
-- **Context.** Pass either `context: { ... }` (a plain object; each session
-  gets a shallow copy) or `buildContext: () => ({ ... })` (a synchronous
-  function called once per session, returning a plain object; for lazily
-  built or per-session values; it cannot return a Promise). Exactly one of
-  the two. The keys are the whole REPL vocabulary of your app (see "Use it").
-- **Lifecycle.** `await engine.start()` after construction, `await engine.stop()`
-  on shutdown. Nothing starts implicitly.
-- **`enabled` lives on the engine.** The engine enforces it (rejects dispatch,
-  refuses streams); the router reads `engine.enabled` and enforces it again at
-  the HTTP edge (404 on every route). One flag, two layers.
+- **Context.** Every session sees `app`: the Express app that mounts the
+  router (`req.app`; a sub-app when you mount it in one). Next to it, pass
+  `context: { ... }` (a plain object; each session gets a shallow copy) or
+  `buildContext: ({ app }) => ({ ... })` (a synchronous function called once
+  per session with the app, returning a plain object; it cannot return a
+  Promise), or neither. A key you pass wins over the injected `app`. These
+  names are the whole REPL vocabulary of your app (see "Use it").
+- **Start.** The engine starts when `createRemoteRepl()` is called. `ready`
+  resolves when the start completes and rejects when it fails (the Redis client
+  cannot subscribe); the failure is logged either way, and it never crashes
+  the app. To
+  start it from your own lifecycle, for example after your node-redis client
+  connects, pass `autoStart: false` and call `await repl.start()`. It never
+  starts on the first request.
+- **Before the start completes**, requests to a disabled REPL get 404 (always
+  first), requests during a start wait for it, requests before
+  `start()` with `autoStart: false` get 503 `remote-repl is not started`, and
+  requests after a failed start get 503 `remote-repl failed to start`.
+- **Stop.** `await repl.close()` on shutdown, before `server.close()`.
+- **`enabled` is one flag.** The engine enforces it (rejects dispatch, refuses
+  streams); the routes enforce it again at the HTTP edge (404 on every route).
 - Works on Express 4.16+ and Express 5 (peer range `^4.16 || ^5`).
 
 Done when `REPL_ENABLED=true` makes `GET /repl` answer 302 behind your auth
@@ -150,9 +162,9 @@ bearer token).
    command id. Observed for the command above:
 
    ```
-   data: {"id":1,"type":"command","commandId":"cmd_1_x6sb","data":{"command":"catService.findAll()","instanceId":"inst_5e4j146j"}}
-   data: {"id":2,"type":"output","commandId":"cmd_1_x6sb","data":"[ 'Tom', 'Felix' ]\n"}
-   data: {"id":3,"type":"system","commandId":"cmd_1_x6sb","data":{"done":true}}
+   data: {"id":1,"type":"command","commandId":"cmd_1_exfm","data":{"command":"catService.findAll()","instanceId":"inst_qn16gbml"}}
+   data: {"id":2,"type":"output","commandId":"cmd_1_exfm","data":"[ 'Tom', 'Felix' ]\n"}
+   data: {"id":3,"type":"system","commandId":"cmd_1_exfm","data":{"done":true}}
    ```
 
 3. Post the next command on the same channel to keep its variables, or on a
@@ -189,21 +201,28 @@ An exception thrown by your code is not an `error` event: it arrives as
 
 ### Vocabulary
 
-A session is a plain `node:repl` whose globals are the keys of the `context`
-the app passed (or the object `buildContext` returned), plus Node's own
-globals. There is no DI container: `get`, `debug`, `methods` and `help` do not
-exist unless the app put them in the context (`typeof get` → `'undefined'`).
-Against the package example, whose context is `{ catService }`:
+A session is a plain `node:repl` whose globals are `app` (the Express app
+that mounts the REPL), the keys of the `context` the app passed (or of the
+object `buildContext` returned), and Node's own globals. There is no DI
+container and there are no helpers: `get`, `debug`, `methods` and `help` do
+not exist unless the app put them in the context (`typeof get` →
+`'undefined'`). Against the package example, whose context is
+`{ catService }`:
 
 | Command                                                   | Observed output                                                      | Use for                                   |
 | --------------------------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------- |
-| `Object.keys(globalThis).filter((k) => !k.startsWith("_"))` | `[ 'global', 'clearImmediate', …, 'sessionStorage', 'catService' ]` | discover what the app exposed: the context keys come last |
+| `Object.keys(globalThis).filter((k) => !k.startsWith("_"))` | `[ 'global', 'clearImmediate', …, 'sessionStorage', 'app', 'catService' ]` | discover what the app exposed: `app` and the context keys come last |
 | `catService.findAll()`                                    | `[ 'Tom', 'Felix' ]`                                                 | call a service method                     |
 | `catService`                                              | `CatService { cats: [ 'Tom', 'Felix' ] }`                            | inspect a service's fields                |
 | `Object.getOwnPropertyNames(Object.getPrototypeOf(catService))` | `[ 'constructor', 'findAll' ]`                               | list a service's methods                  |
+| `app.get('env')`                                          | `'development'`                                                      | read an Express setting (`app.locals` holds what the app stored there) |
 
+`app` is the live app: `app.get('/x', handler)` registers a route at runtime,
+and the expression's value prints the whole app object. To call one of your
+own routes, use `await fetch('http://localhost:3000/…')` from the session.
 To expose more, add keys to `context` (`{ catService, db, config }`) or
-return them from `buildContext`; a session sees exactly those names.
+return them from `buildContext`; a session sees exactly those names and
+`app`.
 
 ### State between commands
 
@@ -239,9 +258,12 @@ so `done` follows `command` directly. That is success, not a lost result.
 - **Multiple app instances** (load-balanced replicas): the in-memory transport
   is per-process. Install `@remote-repl/redis` and pass
   `transport: new RemoteReplIoRedisTransport(client)` (ioredis) or
-  `new RemoteReplNodeRedisTransport(client)` (node-redis) to `createRemoteReplEngine`.
+  `new RemoteReplNodeRedisTransport(client)` (node-redis) to `createRemoteRepl`.
   Hand it one connected client; it owns its own subscriber connection.
-  `ioredis` / `redis` are optional peers: install the one you use.
+  `ioredis` / `redis` are optional peers: install the one you use. A command
+  runs on the instance that owns its channel, so `app` in a session is the
+  app of that instance (its `app.locals`, not those of the instance that
+  answered your last request).
 - **Two apps on one Redis:** the topics have no origin check, so unrelated apps
   sharing a Redis would exchange REPL output and ownership. Give each app's
   transport its own topic `prefix` (second constructor argument):
@@ -250,10 +272,15 @@ so `done` follows `command` directly. That is success, not a lost result.
   other.
 - **Options** (`instanceId`, `sessionTtl`, `replayBufferSize`,
   `heartbeatInterval`, `ownerHeartbeatInterval`, `ownerLeaseTtl`) are the
-  engine's `RemoteReplOptions` from `@remote-repl/core`; pass them in `options`.
-  See "Options" in the README.
+  engine's `RemoteReplOptions` from `@remote-repl/core`; pass them to
+  `createRemoteRepl` next to `enabled`. See "Options" in the README.
 - **Logging:** `logger` (an object with `warn` and `error`) on
-  `createRemoteReplEngine`; defaults to `console`.
+  `createRemoteRepl`; defaults to `console`.
+- **Full control:** `createRemoteRepl` is built on two lower-level calls.
+  `createRemoteReplEngine({ options, context | buildContext, transport?, logger? })`
+  builds the engine, and you own its `engine.start()` and `engine.stop()`;
+  `createRemoteReplRouter({ engine })` returns the router for it. Use them to
+  share one engine between routers. They do not add `app` to the context.
 - **Runnable example:** `packages/express/example/main.ts` in the repository
   (`npm run build`, then `REPL_ENABLED=true npm run example:express`; demo
   bearer token `REPL_TOKEN`, default `dev-token`; context `{ catService }`).
@@ -263,8 +290,8 @@ so `done` follows `command` directly. That is success, not a lost result.
 - Key `enabled` off an environment flag that defaults to off.
 - Mount auth middleware in front of the router in the same `app.use` call;
   the library has none.
-- `await engine.start()` after construction, so commands have a session to
-  run in; `await engine.stop()` on shutdown, so the transport subscription
-  closes and the process exits.
+- `await repl.ready` at boot when a REPL that failed to start must fail the
+  boot; `await repl.close()` on shutdown, before `server.close()`, so the SSE
+  streams end, the transport subscription closes and the process exits.
 - Give each app on a shared Redis its own `prefix`; replicas of one app share
   one.

@@ -50,6 +50,12 @@ describe('an enabled app', () => {
     });
   });
 
+  it('a session sees the app that mounts the REPL as `app`, next to the context', async () => {
+    expect(await run(app, 'app', '[app.locals.consumer, greeting].join(" / ")')).toContain(
+      'express-app / hello from the host app',
+    );
+  });
+
   it('a client reconnecting with Last-Event-ID receives only the events it missed', async () => {
     const channel = 'replay';
     const c1 = await post(app, channel, "'one'");
