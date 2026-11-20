@@ -32,7 +32,7 @@ async function bootstrap(): Promise<void> {
     enabled,
     instanceId: process.env.INSTANCE_ID,
     // No `transport`: the in-memory default, correct for this one process.
-    // What every REPL session sees as globals, next to `app`.
+    // The context every REPL session sees, next to `app`.
     context: { catService },
   });
   app.use('/repl', requireReplToken, repl); // 404s everything when disabled

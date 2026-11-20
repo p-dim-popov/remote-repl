@@ -226,6 +226,8 @@ describe('agent skills (skills.sh layout)', () => {
     // The lower-level pair stays documented, outside the main setup.
     expect(body).toContain('createRemoteReplEngine(');
     expect(body).toContain('createRemoteReplRouter(');
+    expect(body).toContain('engine.start()');
+    expect(body).toContain('engine.stop()');
     expect(body).toContain('prefix');
   });
 });

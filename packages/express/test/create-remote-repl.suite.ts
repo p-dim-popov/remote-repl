@@ -123,7 +123,7 @@ export function describeCreateRemoteRepl(
       }
     });
 
-    it('adds the globals of `context` next to `app`', async () => {
+    it('adds the keys of `context` next to `app`', async () => {
       const app = express();
       const repl = createRemoteRepl({ enabled: true, logger: silent, context: { greeting: 'hello' } });
       app.use('/repl', repl);
@@ -214,6 +214,27 @@ export function describeCreateRemoteRepl(
   }
 
   describe(`${label}: createRemoteRepl: the start`, () => {
+    it('with `autoStart` (the default), is subscribing to the transport when `createRemoteRepl()` returns', async () => {
+      const transport = new RemoteReplInMemoryTransport();
+      const subscribe = vi.spyOn(transport, 'subscribe');
+      const repl = createRemoteRepl({ enabled: true, logger: silent, transport });
+      expect(subscribe).toHaveBeenCalled();
+      await repl.ready;
+      expect(subscribe).toHaveBeenCalledTimes(3); // the command, output and system topics
+      await repl.close();
+    });
+
+    it('with `autoStart: false`, does not touch the transport until `start()`', async () => {
+      const transport = new RemoteReplInMemoryTransport();
+      const subscribe = vi.spyOn(transport, 'subscribe');
+      const repl = createRemoteRepl({ enabled: true, logger: silent, transport, autoStart: false });
+      await tick();
+      expect(subscribe).not.toHaveBeenCalled();
+      await repl.start();
+      expect(subscribe).toHaveBeenCalledTimes(3);
+      await repl.close();
+    });
+
     it('with `autoStart: false`, answers 503 on every route until `start()`, then runs commands', async () => {
       const app = express();
       const repl = createRemoteRepl({ enabled: true, logger: silent, autoStart: false });

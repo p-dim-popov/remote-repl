@@ -122,7 +122,7 @@ const app = express();
 const repl = createRemoteRepl({
   enabled,
   // no `transport`: the in-memory default, for one process; see Redis below
-  context: { catService },                 // the globals every session sees, next to `app`
+  context: { catService },                 // the context every session sees, next to `app`
 });
 app.use('/repl', requireAdmin, repl);
 //          ^ mount path = base path  ^ your auth middleware, in front
@@ -150,13 +150,15 @@ Five rules apply:
   `buildContext: ({ app }) => ({ ... })` (a synchronous function, called once
   per session with the app, returning a plain object), or neither. A key that
   you pass wins over the injected `app`. In a cluster, `app` is the app of the
-  instance that owns the channel.
+  instance that owns the channel. Mount one REPL router once: `app` is the app
+  of the latest request through it. A command sent straight through
+  `repl.engine` before any request has reached the router sees no `app`.
 - **The engine starts on its own.** `createRemoteRepl()` starts it at once, and
   `ready` resolves when the start completes or rejects when it fails. The
   failure is logged either way and never crashes the app. To start it from your
   own lifecycle, pass `autoStart: false` and call `await repl.start()`. The
   engine never starts on the first request: an engine that is not yet
-  subscribed could take over a channel that another instance still owns (see
+  subscribed could preempt the live owner of a channel (see
   [`docs/adr/0007-express-one-call-setup.md`](./docs/adr/0007-express-one-call-setup.md)).
   Until the start completes, a request waits for a start in progress, and gets
   503 before `start()` is called or after a failed start.
@@ -517,8 +519,8 @@ is available for options that need DI, for example to read a `ConfigService`.
 | -------------- | --------------------------------- | --------------------------------------------------------- |
 | `enabled`, …   | `RemoteReplOptions`                  | The engine options above, flat.                           |
 | `transport`    | `RemoteReplTransport` (optional)       | A Redis transport for a cluster. Default: `RemoteReplInMemoryTransport`. |
-| `context`      | `object` (optional)               | Globals of every session next to `app` (shallow copy per session). At most one of `context` / `buildContext`. |
-| `buildContext` | `({ app }) => object` (optional)  | Called once per session, synchronously, with the app; returns the plain object of globals next to `app` (no Promise). |
+| `context`      | `object` (optional)               | The context of every session, next to `app` (shallow copy per session). At most one of `context` / `buildContext`. |
+| `buildContext` | `({ app }) => object` (optional)  | Called once per session, synchronously, with the app; returns the plain object that is the context of that session, next to `app` (no Promise). |
 | `logger`       | `{ warn, error }` (optional)      | Default `console`.                                        |
 | `autoStart`    | `boolean` (optional)              | Default `true`: the engine starts when `createRemoteRepl()` is called. With `false`, call `start()`. |
 

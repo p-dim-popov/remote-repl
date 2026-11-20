@@ -279,7 +279,10 @@ change or that spec goes red. Packages live under `packages/`:
     (`autoStart`, default true) or on `start()`, NEVER on the first request:
     an unsubscribed engine misses other instances' claims and would preempt a
     live owner (ADR 0007). `ready` carries a no-op `catch` so a failed start
-    is logged, never an unhandled rejection. Its HTTP behaviour is
+    is logged, never an unhandled rejection. The gate is the one piece of
+    request handling in a framework package, on purpose: it is lifecycle
+    wiring that only Express needs (NestJS starts the engine in
+    `onModuleInit`), so it stays out of core's shared handler layer. Its HTTP behaviour is
     `test/create-remote-repl.suite.ts`, run on both Express majors by
     `src/create-remote-repl.spec.ts` and `src/create-remote-repl.express4.spec.ts`
     (real engine; a gated fake transport drives the start in progress and the

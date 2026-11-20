@@ -29,7 +29,7 @@ const app = express();
 const repl = createRemoteRepl({
   enabled,
   // no `transport`: the in-memory default, for one process
-  context: { db }, // what every REPL session sees as globals, next to `app`
+  context: { db }, // the context every REPL session sees, next to `app`
 });
 app.use('/repl', requireAdmin, repl);
 const server = app.listen(3000);

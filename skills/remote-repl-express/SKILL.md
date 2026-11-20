@@ -52,7 +52,7 @@ const app = express();
 const repl = createRemoteRepl({
   enabled,
   // no `transport`: the in-memory default, correct for one process; see Redis below
-  context: { db, userService }, // the globals every session sees, next to `app`
+  context: { db, userService }, // the context every session sees, next to `app`
 });
 app.use('/repl', requireAdmin, repl);
 //          ^ mount path = base path  ^ your auth middleware, in front
@@ -76,7 +76,8 @@ Key points:
   `buildContext: ({ app }) => ({ ... })` (a synchronous function called once
   per session with the app, returning a plain object; it cannot return a
   Promise), or neither. A key you pass wins over the injected `app`. These
-  names are the whole REPL vocabulary of your app (see "Use it").
+  names are the whole REPL vocabulary of your app (see "Use it"). Mount one
+  `repl` once: `app` is the app of the latest request through it.
 - **Start.** The engine starts when `createRemoteRepl()` is called. `ready`
   resolves when the start completes and rejects when it fails (the Redis client
   cannot subscribe); the failure is logged either way, and it never crashes

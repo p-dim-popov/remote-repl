@@ -23,21 +23,27 @@ type RemoteReplMiddlewareBaseOptions = RemoteReplOptions & {
  */
 export type RemoteReplMiddlewareOptions =
   | (RemoteReplMiddlewareBaseOptions & {
-      /** Globals every session sees next to `app` (a shallow copy per session). */
+      /** The context every session sees next to `app` (a shallow copy per session). */
       context?: Record<string, unknown>;
       buildContext?: never;
     })
   | (RemoteReplMiddlewareBaseOptions & {
       /**
        * Called once per session, synchronously, with the app that mounts the
-       * router. Returns the globals that session sees next to `app`.
+       * router. Returns the context that session sees next to `app`. `app` is
+       * `undefined` only for a session that a command sent straight through
+       * `engine` builds before any request has reached the router.
        */
-      buildContext: (env: { app: Application }) => Record<string, unknown>;
+      buildContext: (host: { app: Application }) => Record<string, unknown>;
       context?: never;
     });
 
 /** The Express router of the REPL, with the engine and its lifecycle attached. */
 export type RemoteReplMiddleware = Router & {
+  /**
+   * The engine behind the routes. A command dispatched on it before any
+   * request has reached the router runs in a session without `app`.
+   */
   readonly engine: RemoteReplEngine;
   /**
    * Settles with the first start of the engine: resolves when it completes,
@@ -62,7 +68,8 @@ const START_FAILED = Object.freeze({ statusCode: 503, message: 'remote-repl fail
  * The one-call setup: builds the engine, starts it, and returns its router as
  * Express middleware. Mount it behind the app's own auth middleware:
  * `app.use('/repl', requireAdmin, createRemoteRepl({ enabled }))`. Every
- * session gets the app that mounts the router (`req.app`) as `app`.
+ * session gets the app that mounts the router (`req.app`) as `app`. Mount the
+ * router once: `app` is the app of the latest request through it.
  */
 export function createRemoteRepl(opts: RemoteReplMiddlewareOptions): RemoteReplMiddleware {
   const { transport, logger, context, buildContext, autoStart = true, ...options } = opts;

@@ -36,6 +36,12 @@ Until the start completes, the routes give these answers, in this order:
 4. The start failed: 503. The error is logged once, `ready` rejects, and there
    is no retry.
 
+The gate that gives these answers lives in the Express package, not in the
+shared handler layer of the core. It is lifecycle wiring that only Express
+needs: the NestJS package starts the engine in its module lifecycle, before
+the app serves a request, so its routes never see an engine that has not
+started.
+
 ## Considered options
 
 - **Start on the first request**, like the `lazyConnect` option of ioredis.
