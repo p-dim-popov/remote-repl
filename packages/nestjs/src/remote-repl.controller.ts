@@ -28,6 +28,8 @@ import { REMOTE_REPL_OPTIONS } from './constants';
 import type { RemoteReplModuleOptions } from './interfaces/remote-repl-options.interface';
 import { RemoteReplService } from './remote-repl.service';
 
+const VS_ASSET_ROUTE = vsAssetRoute();
+
 /**
  * Thin HTTP wiring over core's shared route handlers (`createRemoteReplHandlers`).
  * All route logic -- body validation, landing redirect, UI rendering, the
@@ -89,15 +91,27 @@ export class RemoteReplController {
   }
 
   // Serves the bundled Monaco editor from our own origin so the UI needs no
-  // CDN. The Express 5 splat param arrives as a string[] of path segments;
-  // the handler applies the traversal guard and returns null (-> 404) for
-  // any escape or miss.
-  @Get(':channel/vs/*path')
-  vsAsset(@Param('path') segments: string[]): StreamableFile {
-    const asset = guard(() => this.handlers.asset(segments.join('/')));
+  // CDN. The handler applies the traversal guard and returns null (-> 404)
+  // for any escape or miss.
+  @Get(VS_ASSET_ROUTE)
+  vsAsset(@Param() params: { path?: string[]; 0?: string }): StreamableFile {
+    const relative = params.path ? params.path.join('/') : (params[0] ?? '');
+    const asset = guard(() => this.handlers.asset(relative));
     if (!asset) throw new NotFoundException();
     return new StreamableFile(asset.buffer, { type: asset.contentType });
   }
+}
+
+/**
+ * The asset route's trailing wildcard. NestJS 11 routes through Express 5,
+ * which wants a named splat (`*path`, a string[] of segments); NestJS 10
+ * routes through Express 4, which only matches a bare `*` (the string
+ * `params[0]`). Both are in the `^10 || ^11` peer range.
+ */
+function vsAssetRoute(): string {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { version } = require('@nestjs/core/package.json') as { version: string };
+  return Number(version.split('.')[0]) >= 11 ? ':channel/vs/*path' : ':channel/vs/*';
 }
 
 /** Runs a synchronous handler call, mapping core's errors to Nest's. */

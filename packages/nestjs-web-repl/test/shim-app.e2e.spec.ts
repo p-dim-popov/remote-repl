@@ -26,7 +26,7 @@ const boot = async (dynamic: ReturnType<typeof WebReplModule.register>): Promise
 // carries the protocol end to end.
 const roundTrip = async (app: INestApplication, channel: string): Promise<void> => {
   const events: WebReplEvent[] = [];
-  const sub = app.get(WebReplService).stream(channel).subscribe((e) => events.push(e as WebReplEvent));
+  const sub = app.get(WebReplService).stream(channel, null).subscribe((e) => events.push(e as WebReplEvent));
   const res = await request(app.getHttpServer()).post(`/repl/${channel}`).send({ command: '6 * 7' });
   expect(res.status).toBe(202);
   await vi.waitFor(() => {

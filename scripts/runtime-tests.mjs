@@ -19,6 +19,10 @@ if (!cmd) {
 }
 const dir = join(fileURLToPath(import.meta.url), '..', '..', 'runtime-tests');
 const apps = readdirSync(dir).filter((d) => existsSync(join(dir, d, 'package.json')));
+if (apps.length === 0) {
+  console.error(`no consumer app under ${dir}: the runtime suite would test nothing`);
+  process.exit(1);
+}
 let ok = true;
 for (const app of apps) {
   console.log(`\n== runtime-tests/${app}: ${[cmd, ...args].join(' ')}`);

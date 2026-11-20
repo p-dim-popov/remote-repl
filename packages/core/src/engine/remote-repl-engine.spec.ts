@@ -1,6 +1,7 @@
 import { RemoteReplInMemoryTransport } from '../transport/in-memory.transport';
 import type { RemoteReplEvent } from '../protocol/messages';
 import type { RemoteReplOptions } from '../protocol/options';
+import type { RemoteReplTransport } from '../protocol/transport';
 import { RemoteReplEngine, RemoteReplDisabledError } from './remote-repl-engine';
 
 const silentLogger = { warn: () => {}, error: () => {} };
@@ -8,7 +9,7 @@ const defaultContext = () => ({ marker: () => 'ctx-ok' });
 
 const makeEngine = async (
   instanceId: string,
-  transport: RemoteReplInMemoryTransport,
+  transport: RemoteReplTransport,
   overrides: Partial<RemoteReplOptions> = {},
   contextFactory: () => Record<string, unknown> = defaultContext,
   clock: () => number = () => Date.now(),
@@ -58,20 +59,54 @@ const makeSharedClock = (start = 0) => {
   return { now: () => now, advance: (ms: number) => (now += ms) };
 };
 
+// One shared medium, one view per instance. kill() makes an instance vanish
+// the way a crashed process does: it hears nothing and nothing it publishes
+// (no heartbeat, no release) reaches the others.
+const makeNetwork = () => {
+  const bus = new RemoteReplInMemoryTransport();
+  return () => {
+    let alive = true;
+    return {
+      publish: async (topic: string, message: string) => {
+        if (alive) await bus.publish(topic, message);
+      },
+      subscribe: async (topic: string, handler: (message: string) => void) =>
+        bus.subscribe(topic, (message) => {
+          if (alive) handler(message);
+        }),
+      close: () => {},
+      kill: () => {
+        alive = false;
+      },
+    };
+  };
+};
+
+// Which instances ran a command: one `command` echo per execution, carrying
+// the executing instance's id.
+const executors = (events: RemoteReplEvent[], commandId: string) =>
+  events
+    .filter((e) => e.type === 'command' && e.commandId === commandId)
+    .map((e) => (e.data as { instanceId: string }).instanceId);
+
 describe('RemoteReplEngine', () => {
-  it('executes a dispatched command and yields the command echo followed by its output', async () => {
+  it('executes a dispatched command and yields the command echo, its output, then done', async () => {
     const transport = new RemoteReplInMemoryTransport();
     const engine = await makeEngine('A', transport);
 
     const iter = engine.events('c1', null);
-    const pending = takeN(iter, 2);
+    const pending = takeN(iter, 3);
     const { commandId } = await engine.dispatch('c1', '2 + 3');
     const got = await pending;
 
-    expect(got[0].type).toBe('command');
-    expect(got[0].commandId).toBe(commandId);
-    expect(got[1].type).toBe('output');
+    expect(got.map((e) => [e.type, e.commandId])).toEqual([
+      ['command', commandId],
+      ['output', commandId],
+      ['system', commandId],
+    ]);
     expect(String(got[1].data)).toContain('5');
+    // The protocol's end-of-command marker: clients read until it arrives.
+    expect(got[2].data).toEqual({ done: true });
     await engine.stop();
   });
 
@@ -127,10 +162,11 @@ describe('RemoteReplEngine', () => {
     const events: RemoteReplEvent[] = [];
     const stop = collect(b.events('c2', null), events);
     await sleep(0);
-    await b.dispatch('c2', 'v + 5');
+    const { commandId } = await b.dispatch('c2', 'v + 5');
     await sleep(20);
     await stop();
-    expect(events.some((e) => e.type === 'output' && String(e.data).includes('15'))).toBe(true);
+    expect(executors(events, commandId)).toEqual(['A']);
+    expect(events.some((e) => e.type === 'output' && e.commandId === commandId && String(e.data).includes('15'))).toBe(true);
 
     await a.stop();
     await b.stop();
@@ -261,46 +297,50 @@ describe('RemoteReplEngine', () => {
     });
   });
 
+  // Ownership is a lease (AGENTS.md, "Owner-liveness lease"). Each test reads
+  // who executed a command from its `command` echo, and how many times.
   describe('owner-liveness (lease-based ownership)', () => {
     const opts = { ownerHeartbeatInterval: 60_000, ownerLeaseTtl: 150_000 };
 
-    it('takes over a channel after its owner goes stale', async () => {
-      const transport = new RemoteReplInMemoryTransport();
+    it('takes over a channel after its owner died, in a fresh session that then persists', async () => {
+      const network = makeNetwork();
       const clock = makeSharedClock();
-      const a = await makeEngine('A', transport, opts, defaultContext, clock.now);
-      const b = await makeEngine('B', transport, opts, defaultContext, clock.now);
+      const viewA = network();
+      const a = await makeEngine('A', viewA, opts, defaultContext, clock.now);
+      const b = await makeEngine('B', network(), opts, defaultContext, clock.now);
 
       await a.dispatch('lease-c1', 'const oldVar = 1');
       await sleep(20);
-      // A "dies": never heartbeats again.
+      viewA.kill();
       clock.advance(150_001);
 
       const events: RemoteReplEvent[] = [];
       const stop = collect(b.events('lease-c1', null), events);
       await sleep(0);
-      const { commandId: takeoverId } = await b.dispatch('lease-c1', 'const w = 99; w');
+      const { commandId: takeoverId } = await b.dispatch('lease-c1', 'typeof oldVar');
       await sleep(20);
-      const takeover = events.find((e) => e.type === 'output' && e.commandId === takeoverId);
-      expect(String(takeover?.data)).toContain('99');
-
-      const { commandId: followupId } = await b.dispatch('lease-c1', 'w + 1');
+      const { commandId: followupId } = await b.dispatch('lease-c1', 'const w = 99; w + 1');
       await sleep(20);
       await stop();
-      const followup = events.find((e) => e.type === 'output' && e.commandId === followupId);
-      expect(String(followup?.data)).toContain('100');
+
+      expect(executors(events, takeoverId)).toEqual(['B']);
+      // The dead owner's variables are gone: B runs a fresh session.
+      expect(String(events.find((e) => e.type === 'output' && e.commandId === takeoverId)?.data)).toContain('undefined');
+      expect(executors(events, followupId)).toEqual(['B']);
+      expect(String(events.find((e) => e.type === 'output' && e.commandId === followupId)?.data)).toContain('100');
       await a.stop();
       await b.stop();
     });
 
-    it('does not preempt a live owner within the lease window', async () => {
-      const transport = new RemoteReplInMemoryTransport();
+    it('never preempts a live owner within the lease window', async () => {
+      const network = makeNetwork();
       const clock = makeSharedClock();
-      const a = await makeEngine('A', transport, opts, defaultContext, clock.now);
-      const b = await makeEngine('B', transport, opts, defaultContext, clock.now);
+      const a = await makeEngine('A', network(), opts, defaultContext, clock.now);
+      const b = await makeEngine('B', network(), opts, defaultContext, clock.now);
 
       await a.dispatch('lease-c2', 'const v = 10');
       await sleep(20);
-      clock.advance(50_000);
+      clock.advance(149_000);
 
       const events: RemoteReplEvent[] = [];
       const stop = collect(b.events('lease-c2', null), events);
@@ -308,27 +348,28 @@ describe('RemoteReplEngine', () => {
       const { commandId } = await b.dispatch('lease-c2', 'v + 5');
       await sleep(20);
       await stop();
-      const output = events.find((e) => e.type === 'output' && e.commandId === commandId);
-      // `v` only resolves if A (with `v` in scope) executed it.
-      expect(String(output?.data)).toContain('15');
+
+      expect(executors(events, commandId)).toEqual(['A']);
+      expect(String(events.find((e) => e.type === 'output' && e.commandId === commandId)?.data)).toContain('15');
       await a.stop();
       await b.stop();
     });
 
-    it('a real owner heartbeat tick refreshes the lease, preventing a later takeover', async () => {
-      const transport = new RemoteReplInMemoryTransport();
+    it("the owner's own heartbeat timer renews the lease, so a live owner keeps a channel past one lease", async () => {
+      const network = makeNetwork();
       const clock = makeSharedClock();
-      // Short real heartbeat so the engine's own setInterval fires during the test.
+      // A real, short owner heartbeat: the engine's own timer must fire (on
+      // the owner knob, not the SSE ping knob) and its claim must refresh
+      // the peer's view of the lease.
       const tight = { ownerHeartbeatInterval: 20, ownerLeaseTtl: 150_000 };
-      const a = await makeEngine('A', transport, tight, defaultContext, clock.now);
-      const b = await makeEngine('B', transport, tight, defaultContext, clock.now);
+      const a = await makeEngine('A', network(), tight, defaultContext, clock.now);
+      const b = await makeEngine('B', network(), tight, defaultContext, clock.now);
 
       await a.dispatch('lease-c3', 'const v = 1');
       await sleep(20);
       clock.advance(90_000);
-      await sleep(60); // let A's heartbeat tick land a claim on B
-      // 180_000 since the original claim (> lease), but only 90_000 since
-      // the heartbeat refreshed B's ownerSeenAt.
+      await sleep(60); // A's heartbeat ticks land a claim on B
+      // 180_000 since the original claim (> lease), 90_000 since the heartbeat.
       clock.advance(90_000);
 
       const events: RemoteReplEvent[] = [];
@@ -337,25 +378,57 @@ describe('RemoteReplEngine', () => {
       const { commandId } = await b.dispatch('lease-c3', 'v + 1');
       await sleep(20);
       await stop();
-      const output = events.find((e) => e.type === 'output' && e.commandId === commandId);
-      expect(String(output?.data)).toContain('2');
+
+      expect(executors(events, commandId)).toEqual(['A']);
+      expect(String(events.find((e) => e.type === 'output' && e.commandId === commandId)?.data)).toContain('2');
       await a.stop();
       await b.stop();
     });
 
-    it('clamps a requested ownerLeaseTtl below the 2x margin instead of throwing, and warns', () => {
+    it.each([
+      [10_001, 20_000],
+      [5_000, 20_000],
+      [25_000, 25_000],
+    ])('a requested ownerLeaseTtl of %i with a 10_000 heartbeat becomes %i (2x minimum, clamped with a warning, never thrown)', (requested, effective) => {
       const warnings: string[] = [];
       const engine = new RemoteReplEngine(
-        { enabled: true, instanceId: 'A', ownerHeartbeatInterval: 10_000, ownerLeaseTtl: 10_001 },
+        { enabled: true, instanceId: 'A', ownerHeartbeatInterval: 10_000, ownerLeaseTtl: requested },
         new RemoteReplInMemoryTransport(),
         () => ({}),
         () => 0,
         { warn: (m) => warnings.push(m), error: () => {} },
       );
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((engine as any).ownerLeaseTtl).toBe(20_000);
-      expect(warnings).toHaveLength(1);
+      expect((engine as any).ownerLeaseTtl).toBe(effective);
+      expect(warnings).toHaveLength(requested === effective ? 0 : 1);
     });
+  });
+
+  it('drops late output from a session disposed by a channel release', async () => {
+    // ReplSession may write after close() (an in-flight async eval). Drive
+    // that deterministically: tear the session down the way a `release`
+    // does, then call its stored onOutput as the late write would.
+    const transport = new RemoteReplInMemoryTransport();
+    const engine = await makeEngine('A', transport);
+    await engine.dispatch('c6', '1 + 1');
+    await sleep(20);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = engine as any;
+    const state = internals.channels.get('c6');
+    const session = state.session;
+    expect(session).toBeDefined();
+
+    const events: RemoteReplEvent[] = [];
+    const stop = collect(engine.events('c6', null), events);
+    await sleep(0);
+    internals.onSys({ channel: 'c6', kind: 'release', instanceId: 'A' });
+    session.opts.onOutput('late-output-after-release');
+    await sleep(20);
+    await stop();
+
+    expect(events.some((e) => String(e.data).includes('late-output-after-release'))).toBe(false);
+    expect(state.buffer.since(null).some((e: RemoteReplEvent) => String(e.data).includes('late-output-after-release'))).toBe(false);
+    await engine.stop();
   });
 
   describe('enabled', () => {

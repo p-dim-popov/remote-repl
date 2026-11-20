@@ -40,7 +40,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/*.tsbuildinfo"
   ],
   "repository": {
     "type": "git",
@@ -60,6 +61,7 @@
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -b tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
+    "check:package": "publint --strict && attw --pack .",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest"
   },
@@ -89,9 +91,11 @@
     "@nestjs/testing": "^11",
     "@swc/core": "^1.15.43",
     "@types/node": "^20",
+    "@types/semver": "^7.8.0",
     "@types/supertest": "^6",
     "reflect-metadata": "^0.2",
     "rxjs": "^7",
+    "semver": "^7.8.6",
     "supertest": "^7",
     "typescript": "^5",
     "unplugin-swc": "^1.5.9",

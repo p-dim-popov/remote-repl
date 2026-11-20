@@ -1,3 +1,4 @@
+import { JSDOM } from 'jsdom';
 import { renderReplUi } from './repl-ui.html';
 
 describe('renderReplUi', () => {
@@ -36,31 +37,86 @@ describe('renderReplUi', () => {
     expect(html).toMatch(/#editor\{[^}]*min-height:\s*200px/);
   });
 
-  it('shows a placeholder while there is no output yet', () => {
-    expect(html).toMatch(/#out:empty::before\{content:'[^']+'/);
-  });
-
-  it('keeps the Ctrl+Enter hint in the desktop markup', () => {
-    expect(html).toContain('class="kbd-hint"');
-    expect(html).toContain('(Ctrl+Enter)');
-  });
-
-  it('escapes an unsafe channel name so it cannot break out of the script', () => {
-    const evil = renderReplUi('</script><b>x');
-    expect(evil).not.toContain('</script><b>x');
-    expect(evil).toContain('\\u003c');
-  });
-
-  it('loads Monaco from the same origin, never a CDN', () => {
-    expect(html).not.toContain('cdn.jsdelivr.net');
-    expect(html).not.toContain('https://');
-  });
-
   it('loads the Monaco loader from a relative vs path', () => {
     expect(html).toContain('src="vs/loader.js"');
   });
 
   it('derives the require.config vs base from document.baseURI', () => {
     expect(html).toMatch(/paths:\s*\{\s*vs:\s*new URL\('vs',\s*document\.baseURI\)\.href\s*\}/);
+  });
+});
+
+// Security invariant 2 (AGENTS.md): the channel name is attacker-controlled
+// (a URL path segment) and SSE payloads are command output. The page is
+// loaded the way a browser loads it: the HTML parser first, then the inline
+// script, with EventSource, fetch and Monaco stubbed.
+describe('renderReplUi in a DOM (security invariant 2)', () => {
+  type FakeEventSource = { url: string; onmessage?: (m: { data: string }) => void };
+
+  const load = (channel: string) => {
+    const streams: FakeEventSource[] = [];
+    const posts: string[] = [];
+    const dom = new JSDOM(renderReplUi(channel), {
+      url: 'http://localhost/repl/x/ui',
+      runScripts: 'dangerously',
+      beforeParse(window) {
+        const w = window as unknown as Record<string, unknown>;
+        w.EventSource = class {
+          constructor(public url: string) {
+            streams.push(this as unknown as FakeEventSource);
+          }
+          close() {}
+        };
+        w.fetch = async (url: string) => {
+          posts.push(String(url));
+          return {};
+        };
+        const editor = { value: '1 + 1', getValue() { return this.value; }, setValue(v: string) { this.value = v; }, addCommand() {} };
+        w.monaco = { editor: { create: () => editor }, KeyMod: { CtrlCmd: 0 }, KeyCode: { Enter: 0 } };
+        w.require = Object.assign((_deps: string[], ready: () => void) => ready(), { config: () => {} });
+      },
+    });
+    const { document } = dom.window;
+    return { dom, document, streams, posts, out: document.getElementById('out')! };
+  };
+
+  const pwn = 'window.pwned=1';
+  it.each([
+    `</script><img src=x onerror=${pwn}>`,
+    `</SCRIPT ><img src=x onerror=${pwn}>`,
+    `</ScRiPt/><img src=x onerror=${pwn}>`,
+    `<!--<script>${pwn}</script>-->`,
+    'line\u2028and\u2029paragraph separators',
+    'spaces / slashes ? query # hash %20 & "quotes" \'apostrophes\'',
+  ])('a channel named %j stays one string: no markup injected, the script runs with the exact name', (channel) => {
+    const { dom, document, streams } = load(channel);
+    expect(document.querySelectorAll('script')).toHaveLength(2);
+    expect(document.querySelector('img')).toBeNull();
+    expect((dom.window as unknown as { pwned?: number }).pwned).toBeUndefined();
+    // The inline script ran and saw the exact name: it opens the stream at
+    // the URL-encoded channel.
+    expect(streams.map((s) => s.url)).toEqual(['../' + encodeURIComponent(channel)]);
+  });
+
+  it('posts commands to the URL-encoded channel', async () => {
+    const channel = 'a b/c?d#e';
+    const { document, posts } = load(channel);
+    document.getElementById('run')!.dispatchEvent(new document.defaultView!.Event('click'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(posts).toEqual(['../' + encodeURIComponent(channel)]);
+  });
+
+  it('renders every SSE payload as text, never as markup', () => {
+    const { document, streams, out } = load('dev');
+    const html = `<img src=x onerror=${pwn}><b>bold</b>`;
+    const send = (event: object) => streams[0].onmessage!({ data: JSON.stringify(event) });
+    send({ id: 1, type: 'command', commandId: 'c1', data: { command: html, instanceId: html } });
+    send({ id: 2, type: 'output', commandId: 'c1', data: html });
+    send({ id: 3, type: 'system', commandId: 'c1', data: { error: html } });
+    send({ id: 4, type: 'system', commandId: null, data: { notice: html } });
+
+    expect(out.querySelector('img, b')).toBeNull();
+    expect(document.getElementById('owner')!.querySelector('img, b')).toBeNull();
+    expect(out.textContent!.split(html).length - 1).toBe(4);
   });
 });

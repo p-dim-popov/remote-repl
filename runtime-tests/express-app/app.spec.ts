@@ -44,6 +44,14 @@ describe('an enabled app', () => {
       expect(await run(app, 'await', "await Promise.resolve('awaited-ok')")).toContain('awaited-ok');
     });
 
+    // Genuine incomplete input is detected through the REPL's buffered-command
+    // state; without it the command hangs until the 30 s watchdog (well past
+    // this test's timeout).
+    it('settles an incomplete command and the next command still works', async () => {
+      await run(app, 'incomplete', 'const y = {');
+      expect(await run(app, 'incomplete', '1 + 1')).toContain('2');
+    });
+
     it('reports a synchronous throw as output and the next command still works', async () => {
       expect(await run(app, 'throw', 'throw new Error("boom")')).toContain('boom');
       expect(await run(app, 'throw', '1 + 2')).toContain('3');

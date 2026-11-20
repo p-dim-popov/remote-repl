@@ -13,7 +13,7 @@ const client = (): RemoteReplIoRedisLike => new RedisMock() as unknown as Remote
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
 /** A raw subscriber on the shared mock Redis: records `<wire topic> <message>`. */
-const observers: RedisMock[] = [];
+const observers: InstanceType<typeof RedisMock>[] = [];
 const observe = async (...topics: string[]) => {
   const sub = new RedisMock();
   observers.push(sub);

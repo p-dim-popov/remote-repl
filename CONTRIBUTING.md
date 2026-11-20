@@ -6,9 +6,11 @@ about how the work was produced** — see the AI policy below.
 
 ## Ground rules
 
-- **Tests must stay green.** Run `npm test`, `npm run build`, and
-  `npm run typecheck` before opening a PR. Add tests for
-  new behavior; don't weaken an existing assertion to make something pass.
+- **Tests must stay green.** Run `npm test`, `npm run build`,
+  `npm run typecheck`, `npm run schema:check` and `npm run check:packages`
+  before opening a PR. [`TESTING.md`](./TESTING.md) says which tests are
+  worth adding and how to check that a new one can fail. When a test goes
+  red for a real reason, fix the code, not the test.
 - **Read [`AGENTS.md`](./AGENTS.md)** first — it documents the build/test flow,
   the project layout, the security invariants, and the `node:repl` gotchas.
 - **Don't regress the security invariants.** In particular, `enabled` must stay

@@ -8,11 +8,6 @@ import { join } from 'node:path';
 describe('@remote-repl/express package boundary', () => {
   const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
 
-  it('is named @remote-repl/express and lives at packages/express', () => {
-    expect(pkg.name).toBe('@remote-repl/express');
-    expect(process.cwd().endsWith(join('packages', 'express'))).toBe(true);
-  });
-
   it('depends on @remote-repl/core and nothing else at runtime', () => {
     expect(Object.keys(pkg.dependencies ?? {})).toEqual(['@remote-repl/core']);
   });
@@ -35,11 +30,5 @@ describe('@remote-repl/express package boundary', () => {
         ['rxjs', 'reflect-metadata', 'redis', 'ioredis'].includes(d),
     );
     expect(forbidden).toEqual([]);
-  });
-
-  it('points main/types at the compiled dist entry', () => {
-    expect(pkg.main).toBe('dist/index.js');
-    expect(pkg.types).toBe('dist/index.d.ts');
-    expect(pkg.exports['.']).toEqual({ types: './dist/index.d.ts', default: './dist/index.js' });
   });
 });

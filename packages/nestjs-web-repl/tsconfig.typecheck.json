@@ -19,7 +19,19 @@
       "@remote-repl/core": [
         "../core/src/index.ts"
       ]
-    }
+    },
+    "types": [
+      "node",
+      "vitest/globals"
+    ]
   },
-  "references": []
+  "references": [],
+  "include": [
+    "src",
+    "test"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }
