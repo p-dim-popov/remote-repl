@@ -36,14 +36,17 @@
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && node scripts/copy-monaco.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json",
+    "check:package": "publint --strict && attw --pack .",
     "schema:generate": "node scripts/generate-schema.mjs",
     "schema:check": "node scripts/generate-schema.mjs --check",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^20",
     "ajv": "^8.20.0",
+    "jsdom": "^31.0.1",
     "monaco-editor": "0.52.0",
     "ts-json-schema-generator": "^2.9.0",
     "typescript": "^5",

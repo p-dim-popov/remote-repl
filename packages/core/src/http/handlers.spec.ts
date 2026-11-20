@@ -147,23 +147,8 @@ describe('createRemoteReplHandlers: stream', () => {
     ]);
   });
 
-  it('stamps heartbeats after a real event with that event\'s id (reference: id 5, 5, 5)', async () => {
-    const { engine } = engineWithEvents([out(5), ping, ping]);
-    const h = createRemoteReplHandlers(engine, { enabled: true });
-    expect(idLines(await drain(h.stream('chanA', null)))).toEqual(['id: 5', 'id: 5', 'id: 5']);
-  });
-
-  it("stamps a heartbeat before any real event with the client's own cursor", async () => {
-    const { engine } = engineWithEvents([ping, out(7), ping]);
-    const h = createRemoteReplHandlers(engine, { enabled: true });
-    expect(idLines(await drain(h.stream('chanA', 5)))).toEqual(['id: 5', 'id: 7', 'id: 7']);
-  });
-
-  it('stamps a heartbeat on a fresh connection (no cursor, nothing sent) with 0', async () => {
-    const { engine } = engineWithEvents([ping]);
-    const h = createRemoteReplHandlers(engine, { enabled: true });
-    expect(idLines(await drain(h.stream('chanA', null)))).toEqual(['id: 0']);
-  });
+  // The heartbeat id stamping is specified once, on streamFrames below:
+  // stream() is sseFrameToText over the same frames.
 
   it('return() tears down the engine stream (subscription bookkeeping stays in the handler)', async () => {
     const { engine, returned } = engineWithEvents([out(1), out(2), out(3)]);

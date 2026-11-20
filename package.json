@@ -15,6 +15,7 @@
     "test": "npm test --workspaces --if-present",
     "test:runtime": "node scripts/runtime-tests.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "check:packages": "npm run check:package --workspaces --if-present",
     "example": "npm run example --workspace @remote-repl/nestjs",
     "example:express": "npm run example --workspace @remote-repl/express",
     "schema:check": "npm run schema:check --workspace @remote-repl/core",
@@ -23,7 +24,9 @@
     "changeset:publish": "npm run build && changeset publish"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@changesets/changelog-github": "^1.0.1",
-    "@changesets/cli": "^3.0.3"
+    "@changesets/cli": "^3.0.3",
+    "publint": "^0.3.25"
   }
 }

@@ -40,6 +40,18 @@ describe('RemoteReplInMemoryTransport', () => {
     expect(ownReceived).toEqual(['self']);
   });
 
+  // The engine relies on this: a subscriber that attaches right after a
+  // publish still receives it (see the replay comment in remote-repl-engine.ts).
+  it('delivers asynchronously, never inside publish()', async () => {
+    const a = new RemoteReplInMemoryTransport();
+    const received: string[] = [];
+    await a.subscribe('remote-repl:out', (m) => received.push(m));
+    void a.publish('remote-repl:out', 'later');
+    expect(received).toEqual([]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(received).toEqual(['later']);
+  });
+
   it('detaches every subscriber on close()', async () => {
     const t = new RemoteReplInMemoryTransport();
     const received: string[] = [];

@@ -1,6 +1,6 @@
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { describe, expect, it } from 'vitest';
 
 // `npm pack --json` prints an array of pack results up to npm 11 and, from
@@ -13,6 +13,11 @@ const packedPaths = (packJson: string): string[] => {
 
 const read = (p: string) => JSON.parse(readFileSync(p, 'utf8'));
 const repoRoot = join(process.cwd(), '..', '..');
+
+const listFiles = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? listFiles(join(dir, e.name)) : [join(dir, e.name)],
+  );
 
 const manifestsUnder = (dir: string) =>
   readdirSync(join(repoRoot, dir))
@@ -37,7 +42,7 @@ describe('packaging', () => {
 
 // What npm actually ships, for every workspace package. Entry points are
 // checked after the build by `npm run check:packages` (publint and attw).
-// Build leftovers only exist once dist/ does, which CI builds before testing.
+// The dist/ checks need a build, which CI runs before testing.
 describe('published tarballs', () => {
   const packages = manifestsUnder('packages').map((p) => p.slice(0, -'/package.json'.length));
 
@@ -49,6 +54,16 @@ describe('published tarballs', () => {
       );
       expect(paths).toEqual(expect.arrayContaining(['LICENSE', 'README.md', 'package.json']));
       expect(paths.filter((p) => p.startsWith('src/') || p.endsWith('.tsbuildinfo'))).toEqual([]);
+      // Everything the build produced ships (core's Monaco copy under
+      // dist/ui/vs included), once there is a build to compare with.
+      const dist = join(dir, 'dist');
+      if (existsSync(dist)) {
+        const built = listFiles(dist)
+          .map((f) => f.slice(dir.length + 1).split(sep).join('/'))
+          .filter((f) => !f.endsWith('.tsbuildinfo'));
+        expect(built.length).toBeGreaterThan(0);
+        expect(built.filter((f) => !paths.includes(f))).toEqual([]);
+      }
     },
     30_000,
   );
