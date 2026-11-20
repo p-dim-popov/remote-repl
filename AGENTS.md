@@ -160,7 +160,8 @@ changesets), `.github/workflows/`, `README.md`
 (the full consumer documentation for every package; each package also has a
 short `README.md` that links back to it), `CHANGELOG.md` (pre-split history
 only; per-package `CHANGELOG.md` files are generated from here on),
-`CONTRIBUTING.md`, `GLOSSARY.md` (the ubiquitous language), `mise.toml` (the
+`CONTRIBUTING.md`, `GLOSSARY.md` (the ubiquitous language), `TESTING.md` (the
+testing strategy), `mise.toml` (the
 runtime pin), `scripts/runtime-tests.mjs` (the runtime suite loop),
 `runtime-tests/` (the consumer apps it runs, see "Runtime support"), `docs/adr/`
 (architecture decision records: `0001` separate packages over subpath exports,
@@ -435,8 +436,9 @@ change or that spec goes red. Packages live under `packages/`:
   (its clients are optional peers); `packages/express` of NestJS and rxjs
   (`express` is its peer). Put framework-specific code in the package that
   owns the framework.
-- TDD: write a failing test first, then the minimal implementation. Do not
-  weaken or delete an assertion to make a test pass — fix the code.
+- Tests: read `TESTING.md` before writing, changing or deleting a test.
+  Test-first covers behaviour; one-off and config changes ship without a
+  committed test.
 - The controller returns strings and RxJS `Observable`s only (no raw
   `req`/`res`) so it stays platform-agnostic across Express and Fastify.
 - Keep files focused and small; match existing style.
