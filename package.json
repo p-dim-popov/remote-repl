@@ -19,7 +19,7 @@
     "example:express": "npm run example --workspace @remote-repl/express",
     "schema:check": "npm run schema:check --workspace @remote-repl/core",
     "changeset": "changeset",
-    "changeset:version": "changeset version",
+    "changeset:version": "changeset version && npm install --package-lock-only",
     "changeset:publish": "npm run build && changeset publish"
   },
   "devDependencies": {

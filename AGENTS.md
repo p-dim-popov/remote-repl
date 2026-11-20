@@ -440,7 +440,9 @@ change or that spec goes red. Packages live under `packages/`:
   Test-first covers behaviour; one-off and config changes ship without a
   committed test.
 - The controller returns strings and RxJS `Observable`s only (no raw
-  `req`/`res`) so it stays platform-agnostic across Express and Fastify.
+  `req`/`res`). Only the Express platform is tested and supported: on
+  `@nestjs/platform-fastify` the module fails at boot (the `:channel/vs/*path`
+  asset route is not a valid Fastify route).
 - Keep files focused and small; match existing style.
 - **Releases are automated with changesets** (`.changeset/config.json`;
   `release.yml` runs `changesets/action` on every push to `main`). Never

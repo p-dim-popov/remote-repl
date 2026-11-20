@@ -13,7 +13,8 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/*.tsbuildinfo"
   ],
   "repository": {
     "type": "git",
