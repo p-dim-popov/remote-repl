@@ -116,14 +116,15 @@ complete.
   Deno exactly; bump it deliberately.
 - **The runtime suite is consumer apps, not the package specs.**
   `runtime-tests/*` is a workspace glob of small apps; `runtime-tests/express-app`
-  is a plain Express app that depends on `@remote-repl/express` and
+  is a plain Express app (set up with `createRemoteRepl`) that depends on
+  `@remote-repl/express` and
   `@remote-repl/core` through the workspace links with NO vitest alias, so
   it resolves each package's built `dist/` exactly like an installed
   consumer (the suite goes red when `dist/` is missing). Vitest runs
   in-process under the given runtime; the app listens on a real port and the
   scenarios use the global `fetch` over HTTP: the session-layer scenarios
   (multi-line input, top-level `await`, a synchronous throw followed by a
-  working next command), `Last-Event-ID` replay, the UI page and one Monaco
+  working next command), `app` in the context, `Last-Event-ID` replay, the UI page and one Monaco
   asset byte-compared with `dist/ui/vs`, and a disabled engine answering 404
   on every route. Each app is `private`, unscoped, defines a `probe` script
   and never `build`, `test` or `typecheck` (pinned by
@@ -165,7 +166,8 @@ runtime pin), `scripts/runtime-tests.mjs` (the runtime suite loop),
 (architecture decision records: `0001` separate packages over subpath exports,
 `0002` no rxjs in core, `0003` no wire protocol version, `0004` the
 `remote-repl` name and why the web UI is one client surface, not the product,
-`0006` the CI shape), `docs/agents/` (agent
+`0005` proper names, `0006` the CI shape, `0007` the Express one-call setup
+starts the engine at construction), `docs/agents/` (agent
 workflow notes), `skills/` (consumer-facing agent skills, see below) and
 `examples/stackblitz/` (a standalone demo against the published package, not
 a workspace). `packages/nestjs/src/docs.spec.ts` checks that every path
@@ -260,10 +262,31 @@ change or that spec goes red. Packages live under `packages/`:
     import at runtime). `test/fakes/fake-node-redis.ts` — the node-redis fake
     used by the unit spec; the ioredis spec uses `ioredis-mock`.
 - `packages/express/` — `@remote-repl/express`: the Express package, thin wiring of core's
-  `createRemoteReplHandlers` onto an Express `Router`. Depends on `@remote-repl/core`
+  `createRemoteReplHandlers` onto an Express `Router`, plus `app` in the
+  context. Depends on `@remote-repl/core`
   and nothing else; `express` (`^4.16 || ^5`) is a PEER (pinned by
   `src/package-boundary.spec.ts`, which also forbids `@nestjs/*`, rxjs, redis
   clients). No decorators, no swc, no `reflect-metadata`. Paths relative to it:
+  - `src/create-remote-repl.ts` — `createRemoteRepl({ enabled, …engine
+    options, context | buildContext({ app }), transport?, logger?, autoStart? })`,
+    the one-call setup the docs lead with: builds the engine over
+    `createRemoteReplEngine`, mounts `createRemoteReplRouter` behind a gate
+    middleware, and returns that `Router` with `engine`, `ready`, `start()`
+    and `close()`. The gate records `req.app` (every session gets it as `app`;
+    a caller key wins) and answers in this order: disabled → straight to the
+    router (404 first, security invariant 1), no start yet → 503, start in
+    progress → wait, failed start → 503. The engine starts at construction
+    (`autoStart`, default true) or on `start()`, NEVER on the first request:
+    an unsubscribed engine misses other instances' claims and would preempt a
+    live owner (ADR 0007). `ready` carries a no-op `catch` so a failed start
+    is logged, never an unhandled rejection. The gate is the one piece of
+    request handling in a framework package, on purpose: it is lifecycle
+    wiring that only Express needs (NestJS starts the engine in
+    `onModuleInit`), so it stays out of core's shared handler layer. Its HTTP behaviour is
+    `test/create-remote-repl.suite.ts`, run on both Express majors by
+    `src/create-remote-repl.spec.ts` and `src/create-remote-repl.express4.spec.ts`
+    (real engine; a gated fake transport drives the start in progress and the
+    failed start).
   - `src/repl-router.ts` — `createRemoteReplRouter({ engine })`; the router reads
     `enabled` from `engine.enabled` (a read-only getter on `RemoteReplEngine`),
     so there is no second flag to drift. The user
@@ -295,8 +318,9 @@ change or that spec goes red. Packages live under `packages/`:
     range. `test/` is outside the build (`tsconfig.build.json` excludes it).
     `src/integration.spec.ts` (real engine + in-memory transport round trip,
     disabled engine subscribes to nothing, auth middleware in front → 401).
-  - `example/main.ts` — runnable host app: `REPL_ENABLED` (default off),
-    bearer-token middleware in front, `CatService` exposed via `context`.
+  - `example/main.ts` — runnable host app on `createRemoteRepl`: `REPL_ENABLED`
+    (default off), bearer-token middleware in front, `CatService` exposed via
+    `context` next to `app`.
 - `packages/nestjs/` — `@remote-repl/nestjs`, with its own `package.json`, `tsconfig*.json` and
   `vitest.config.ts`. The root `example` script addresses it by this name.
   The legacy unscoped `nestjs-web-repl` name is owned by the shim package

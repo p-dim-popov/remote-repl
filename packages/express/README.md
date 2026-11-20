@@ -21,26 +21,33 @@ npm install @remote-repl/express
 
 ```ts
 import express from 'express';
-import { createRemoteReplEngine, createRemoteReplRouter } from '@remote-repl/express';
+import { createRemoteRepl } from '@remote-repl/express';
 
 const enabled = process.env.REPL_ENABLED === 'true';
 
-const engine = createRemoteReplEngine({
-  options: { enabled },
-  // no `transport`: the in-memory default, for one process
-  context: { db }, // what every REPL session sees as globals
-});
-await engine.start(); // no-op when disabled
-
 const app = express();
-app.use('/repl', requireAdmin, createRemoteReplRouter({ engine }));
-app.listen(3000);
+const repl = createRemoteRepl({
+  enabled,
+  // no `transport`: the in-memory default, for one process
+  context: { db }, // the context every REPL session sees, next to `app`
+});
+app.use('/repl', requireAdmin, repl);
+const server = app.listen(3000);
+
+// on shutdown: stop the REPL first, it ends the open SSE streams
+await repl.close();
+server.close();
 ```
 
-The mount path is the base path. `enabled` is set once, on the engine: the
-engine refuses commands and streams, and the router reads `engine.enabled` and
-returns 404 on every route. One process needs no transport. For several
-replicas, pass a transport from `@remote-repl/redis`.
+The mount path is the base path. Every session sees the Express app that
+mounts the router as `app`, next to your `context` (or what
+`buildContext({ app })` returns). The engine starts when `createRemoteRepl()`
+is called; `await repl.ready` to make a failed start fail the boot, or pass
+`autoStart: false` and call `await repl.start()` from your own lifecycle.
+`enabled` is set once: the engine refuses commands and streams, and every
+route returns 404. One process needs no transport. For several replicas, pass
+a transport from `@remote-repl/redis`. The lower-level `createRemoteReplEngine`
+and `createRemoteReplRouter` stay available for full control.
 
 ## Runtimes
 

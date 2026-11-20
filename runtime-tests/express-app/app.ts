@@ -3,7 +3,7 @@
 // package's built `dist/` (there is no vitest alias here, on purpose).
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { createRemoteReplEngine, createRemoteReplRouter } from '@remote-repl/express';
+import { createRemoteRepl } from '@remote-repl/express';
 
 export interface App {
   /** `http://127.0.0.1:<port>`, no trailing slash. */
@@ -12,25 +12,25 @@ export interface App {
 }
 
 export const startApp = async ({ enabled }: { enabled: boolean }): Promise<App> => {
-  const engine = createRemoteReplEngine({
-    options: { enabled, heartbeatInterval: 150 },
+  const app = express();
+  app.locals.consumer = 'express-app';
+  const repl = createRemoteRepl({
+    enabled,
+    heartbeatInterval: 150,
     context: { greeting: 'hello from the host app' },
     logger: { warn() {}, error() {} },
   });
-  await engine.start();
-  const app = express();
-  app.use('/repl', createRemoteReplRouter({ engine }));
+  app.use('/repl', repl);
+  await repl.ready;
   const server = app.listen(0);
   await new Promise<void>((r) => server.once('listening', () => r()));
   const { port } = server.address() as AddressInfo;
   return {
     url: `http://127.0.0.1:${port}`,
     close: async () => {
-      server.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) =>
-        server.close((err) => (err ? reject(err) : resolve())),
-      );
-      await engine.stop();
+      // Stop first: it ends the open SSE streams, which `server.close()` waits for.
+      await repl.close();
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     },
   };
 };

@@ -6,8 +6,8 @@ browser UI, backed by a real `node:repl` session that runs inside your app. In
 NestJS, the session is connected to the DI container, in the same way as
 `nest start --entrypoint repl`. The helpers `get(SomeService)`, `resolve(...)`,
 `select(...)`, and the others work as they do in the local REPL. In Express, the
-session sees the context object that you pass in. In both cases, you reach the
-REPL over HTTP, against a running server.
+session sees the app as `app`, next to the context object that you pass in. In
+both cases, you reach the REPL over HTTP, against a running server.
 
 This repository was `nestjs-web-repl`. That package name still works: it is now
 a thin shim over the `@remote-repl` packages. See [Packages](#packages).
@@ -27,7 +27,7 @@ a thin shim over the `@remote-repl` packages. See [Packages](#packages).
 | --------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
 | `@remote-repl/core`   | The engine, the protocol types, the in-memory transport, the browser UI (the per-request UI page plus the Monaco UI bundle) and the shared handler layer. No framework. | A dependency of the framework packages. Install it directly only to write a new one. |
 | `@remote-repl/nestjs` | The NestJS package: `RemoteReplModule.register` / `registerAsync`, the controller, the DI-container context.          | `npm install @remote-repl/nestjs`                   |
-| `@remote-repl/express`| The Express package: `createRemoteReplEngine` + `createRemoteReplRouter`. Mount the router, the mount path is the base path.  | `npm install @remote-repl/express`                   |
+| `@remote-repl/express`| The Express package: `createRemoteRepl`, a router you mount behind your auth middleware (the mount path is the base path). Sessions see the app as `app`.  | `npm install @remote-repl/express`                   |
 | `@remote-repl/redis`  | The Redis transports (`ioredis` and `node-redis`) for several instances, with an optional topic `prefix`.          | `npm install @remote-repl/redis` plus `ioredis` or `redis` |
 | `nestjs-web-repl`     | The legacy name. A shim: the 2.3.x names as `@deprecated` aliases of `@remote-repl/nestjs`, and of `@remote-repl/redis` under `nestjs-web-repl/redis`. See [Migrating from nestjs-web-repl](#migrating-from-nestjs-web-repl). | `npm install nestjs-web-repl`                       |
 
@@ -114,43 +114,56 @@ get(CatService).findAll()
 
 ```ts
 import express from 'express';
-import { createRemoteReplEngine, createRemoteReplRouter } from '@remote-repl/express';
+import { createRemoteRepl } from '@remote-repl/express';
 
 const enabled = process.env.REPL_ENABLED === 'true';
 
-const engine = createRemoteReplEngine({
-  options: { enabled },
-  // no `transport`: the in-memory default, for one process; see Redis below
-  context: { catService },                 // the globals every session sees
-});
-await engine.start(); // no-op when disabled
-
 const app = express();
-app.use('/repl', requireAdmin, createRemoteReplRouter({ engine }));
-//          ^ mount path = base path      ^ your auth middleware, in front
+const repl = createRemoteRepl({
+  enabled,
+  // no `transport`: the in-memory default, for one process; see Redis below
+  context: { catService },                 // the context every session sees, next to `app`
+});
+app.use('/repl', requireAdmin, repl);
+//          ^ mount path = base path  ^ your auth middleware, in front
+await repl.ready; // optional: a failed start fails the boot
 
 const server = app.listen(3000);
-process.once('SIGTERM', () => {
+process.once('SIGTERM', async () => {
+  await repl.close(); // first: it ends the open SSE streams that server.close() waits for
   server.close();
-  void engine.stop();
 });
 ```
 
-Four rules apply:
+Five rules apply:
 
-- **The mount path is the base path.** `app.use('/repl', router)` gives
+- **The mount path is the base path.** `app.use('/repl', repl)` gives
   `/repl`, `/repl/:channel`, `/repl/:channel/ui` and `/repl/:channel/vs/*`.
   There is no separate base-path option. Nested mounts work, because the
   landing redirect uses `req.originalUrl`.
-- **`enabled` is set once, on the engine.** The engine enforces it (it rejects
-  commands and refuses streams). The router reads `engine.enabled` and enforces
-  it again at the HTTP edge (404 on every route). There is no second flag.
-- **You own the lifecycle.** Call `await engine.start()` after construction and
-  `await engine.stop()` on shutdown. Nothing starts on its own.
-- **Context.** Pass `context: { ... }` (a plain object, each session gets a
-  shallow copy) or `buildContext: () => ({ ... })` (a synchronous function,
-  called once per session, returning a plain object). Pass exactly one of the
-  two.
+- **`enabled` is set once.** The engine enforces it (it rejects commands and
+  refuses streams), and the routes enforce it again at the HTTP edge (404 on
+  every route, before any other answer). There is no second flag.
+- **Context.** Every session sees `app`: the Express app that mounts the router
+  (`req.app`, so a sub-app when you mount it in one). Next to it, pass
+  `context: { ... }` (a plain object, each session gets a shallow copy) or
+  `buildContext: ({ app }) => ({ ... })` (a synchronous function, called once
+  per session with the app, returning a plain object), or neither. A key that
+  you pass wins over the injected `app`. In a cluster, `app` is the app of the
+  instance that owns the channel. Mount one REPL router once: `app` is the app
+  of the latest request through it. A command sent straight through
+  `repl.engine` before any request has reached the router sees no `app`.
+- **The engine starts on its own.** `createRemoteRepl()` starts it at once, and
+  `ready` resolves when the start completes or rejects when it fails. The
+  failure is logged either way and never crashes the app. To start it from your
+  own lifecycle, pass `autoStart: false` and call `await repl.start()`. The
+  engine never starts on the first request: an engine that is not yet
+  subscribed could preempt the live owner of a channel (see
+  [`docs/adr/0007-express-one-call-setup.md`](./docs/adr/0007-express-one-call-setup.md)).
+  Until the start completes, a request waits for a start in progress, and gets
+  503 before `start()` is called or after a failed start.
+- **You own the stop.** Call `await repl.close()` on shutdown, before
+  `server.close()`.
 
 A runnable example is in [`packages/express/example/main.ts`](./packages/express/example/main.ts).
 It puts a demo bearer-token middleware in front of the router (`REPL_TOKEN`,
@@ -269,7 +282,7 @@ RemoteReplModule.registerAsync({
 Put your middleware before the router in the same `app.use` call:
 
 ```ts
-app.use('/repl', requireAdmin, createRemoteReplRouter({ engine }));
+app.use('/repl', requireAdmin, createRemoteRepl({ enabled }));
 ```
 
 The middleware runs in front of every route: the UI page, the SSE stream, the
@@ -342,13 +355,13 @@ the in-memory transport; the Redis transports' prefix semantics are pinned in
 `packages/redis`.
 
 When you give no transport, the engine uses `RemoteReplInMemoryTransport`. The
-`RemoteReplEngine` constructor, `createRemoteReplEngine` and
+`RemoteReplEngine` constructor, `createRemoteRepl`, `createRemoteReplEngine` and
 `RemoteReplModule.register` all apply this default. It works inside one process
 only: a cluster of instances needs the Redis transport from `@remote-repl/redis`.
 In NestJS, use the `transport` extra. Pass a ready instance, `{ useClass, imports }`, or
 `{ useFactory, inject, imports }`. All three forms are DI-capable, so the
 transport can depend on other providers. In Express, pass it as `transport` to
-`createRemoteReplEngine`. A transport implements:
+`createRemoteRepl`. A transport implements:
 
 ```ts
 export interface RemoteReplTransport {
@@ -412,8 +425,8 @@ RemoteReplModule.register({
 **Express:**
 
 ```ts
-const engine = createRemoteReplEngine({
-  options: { enabled },
+const repl = createRemoteRepl({
+  enabled,
   transport: new RemoteReplIoRedisTransport(new Redis(process.env.REDIS_URL!)),
   context: { catService },
 });
@@ -469,8 +482,8 @@ hard-to-reverse decisions.
 ## Options
 
 The engine options are the same for every transport. In NestJS, pass them to
-`register`/`registerAsync`. In Express, pass them as `options` to
-`createRemoteReplEngine`.
+`register`/`registerAsync`. In Express, pass them to `createRemoteRepl`, next
+to `enabled`.
 
 | Option              | Type             | Default                    | Notes                                              |
 | ------------------- | ---------------- | --------------------------- | --------------------------------------------------- |
@@ -500,7 +513,31 @@ inside them. Both are static choices made at module definition time:
 `RemoteReplModule.registerAsync({ useFactory, inject, imports, controller?, transport? })`
 is available for options that need DI, for example to read a `ConfigService`.
 
-### Express factory (`createRemoteReplEngine`)
+### Express setup (`createRemoteRepl`)
+
+| Argument       | Type                              | Notes                                                     |
+| -------------- | --------------------------------- | --------------------------------------------------------- |
+| `enabled`, …   | `RemoteReplOptions`                  | The engine options above, flat.                           |
+| `transport`    | `RemoteReplTransport` (optional)       | A Redis transport for a cluster. Default: `RemoteReplInMemoryTransport`. |
+| `context`      | `object` (optional)               | The context of every session, next to `app` (shallow copy per session). At most one of `context` / `buildContext`. |
+| `buildContext` | `({ app }) => object` (optional)  | Called once per session, synchronously, with the app; returns the plain object that is the context of that session, next to `app` (no Promise). |
+| `logger`       | `{ warn, error }` (optional)      | Default `console`.                                        |
+| `autoStart`    | `boolean` (optional)              | Default `true`: the engine starts when `createRemoteRepl()` is called. With `false`, call `start()`. |
+
+It returns an Express `Router` with these members:
+
+| Member     | Notes                                                                                   |
+| ---------- | --------------------------------------------------------------------------------------- |
+| `ready`    | A promise that settles with the first start: resolves when it completes, rejects when it fails. |
+| `start()`  | Starts the engine and returns the same promise as `ready`. Idempotent; a failed start is not retried. |
+| `close()`  | Stops the engine and ends every SSE stream. Call it before `server.close()`.            |
+| `engine`   | The `RemoteReplEngine`.                                                                 |
+
+### Express lower-level pair (`createRemoteReplEngine` + `createRemoteReplRouter`)
+
+`createRemoteRepl` is built on these two calls. Use them for full control, for
+example to share one engine between routers. They do not add `app` to the
+context, and you own `engine.start()` and `engine.stop()`.
 
 | Argument       | Type                              | Notes                                                     |
 | -------------- | --------------------------------- | --------------------------------------------------------- |
@@ -509,6 +546,8 @@ is available for options that need DI, for example to read a `ConfigService`.
 | `context`      | `object`                          | The globals of every session (shallow copy per session). Exactly one of `context` / `buildContext`. |
 | `buildContext` | `() => object`                    | Called once per session, synchronously; returns the plain object that becomes the session's globals (no Promise). |
 | `logger`       | `{ warn, error }`                 | Default `console`.                                        |
+
+`createRemoteReplRouter({ engine })` returns the router for that engine.
 
 ## Exports
 
@@ -526,9 +565,10 @@ you register next to the module. The package also re-exports
 types `RemoteReplModuleOptions`, `RemoteReplModuleExtras` and
 `RemoteReplTransportConfig`.
 
-**`@remote-repl/express`**: `createRemoteReplEngine` and `createRemoteReplRouter`,
-with the types `RemoteReplEngineOptions`, `RemoteReplRouterOptions` and
-`RemoteReplRouterEngine`.
+**`@remote-repl/express`**: `createRemoteRepl`, `createRemoteReplEngine` and
+`createRemoteReplRouter`, with the types `RemoteReplMiddleware`,
+`RemoteReplMiddlewareOptions`, `RemoteReplEngineOptions`,
+`RemoteReplRouterOptions` and `RemoteReplRouterEngine`.
 
 **`@remote-repl/redis`**: `RemoteReplIoRedisTransport`,
 `RemoteReplNodeRedisTransport`, `RemoteReplBaseRedisTransport`, and the types
@@ -600,7 +640,7 @@ npx skills add p-dim-popov/remote-repl/skills/remote-repl-nestjs
 # nestjs-web-repl shim (legacy names: WebReplModule, adapter, nestjs-web-repl/redis)
 npx skills add p-dim-popov/remote-repl/skills/nestjs-web-repl
 
-# @remote-repl/express (createRemoteReplEngine + createRemoteReplRouter, your own context)
+# @remote-repl/express (createRemoteRepl: `app` plus your own context)
 npx skills add p-dim-popov/remote-repl/skills/remote-repl-express
 ```
 

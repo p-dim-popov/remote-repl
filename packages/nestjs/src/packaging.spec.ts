@@ -213,9 +213,17 @@ describe('agent skills (skills.sh layout)', () => {
     expect(security(skill('remote-repl-nestjs'))).toBe(security(skill('nestjs-web-repl')));
   });
 
-  it('the Express skill documents the engine + router API and the lifecycle', () => {
+  it('the Express skill leads with createRemoteRepl: `app` in the context, the start, the stop', () => {
     const body = skill('remote-repl-express');
     expect(body).toContain('@remote-repl/express');
+    const wire = body.slice(body.indexOf('## Wire it up'), body.indexOf('## Use it'));
+    expect(wire).toContain('createRemoteRepl(');
+    expect(wire).not.toContain('createRemoteReplEngine(');
+    expect(wire).toContain('repl.ready');
+    expect(wire).toContain('autoStart: false');
+    expect(wire).toContain('repl.close()');
+    expect(usageSection(body)).toContain("app.get('env')");
+    // The lower-level pair stays documented, outside the main setup.
     expect(body).toContain('createRemoteReplEngine(');
     expect(body).toContain('createRemoteReplRouter(');
     expect(body).toContain('engine.start()');
