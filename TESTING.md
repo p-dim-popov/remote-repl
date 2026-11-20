@@ -27,7 +27,7 @@ Ordinary changes in this repo include:
 
 ## Test-first, and its scope
 
-Write the failing test first for new behaviour, for a bug fix and for a refactor that touches behaviour. A bug fix ships with the test that is red on the bug.
+Write the failing test first for new behaviour, for a bug fix and for a refactor that touches behaviour. A bug fix ships with the test that is red on the bug, unless the rule above says the bug cannot come back without an edit of the fixed line.
 
 One-off changes, configuration and generated files are outside this rule. A scratch test can prove such a change while it is made. Delete it before merge, and check the change with the build, `npm pack`, the diff or the CI run.
 
@@ -53,8 +53,8 @@ Test each behaviour at the layer that owns it. Prefer the layer closest to what 
 |---|---|---|
 | Consumer seam | A real app with a real engine behaves as documented over HTTP and SSE: multi-instance ownership, the lease, replay, the `enabled` 404s | `packages/nestjs/test/`, `packages/express/test/*.suite.ts` (on both Express majors), `runtime-tests/*` |
 | Engine and session | The logic, driven by the injected clock and the in-memory transport. Tests assert what an observer sees: which instance ran a command, how many times, which events and in what order | `packages/core/src/engine/`, `packages/core/src/session/` |
-| Contracts | The wire protocol and the public API. Events captured from a real engine run validate against `packages/core/schema/protocol.schema.json`. A snapshot of each barrel's runtime exports shows every API change in the diff | `packages/core/src/protocol/`, `packages/core/src/index.spec.ts` |
-| Artifacts | What npm ships. Each package is packed and the tarball checked: entry points resolve, `LICENSE` is present, no build leftovers | the packaging specs |
+| Contracts | The wire protocol and the public API. Every message of a real engine run validates against `packages/core/schema/protocol.schema.json`. A snapshot of core's runtime exports shows every API change in the diff. The real Redis clients' types satisfy the transports' interfaces | `packages/core/src/protocol/`, `packages/core/src/index.spec.ts`, `packages/redis/src/client-types.spec.ts` |
+| Artifacts | What npm ships. Each package is packed and the tarball checked: entry points and exports resolve, `LICENSE` is present, everything built ships, no build leftovers | `packages/nestjs/src/packaging.spec.ts`; `npm run check:packages` (publint and `attw --pack`, after a build) |
 | Docs and skills | Code samples compile against the built types, referenced paths exist, deliberate copies stay identical | `packages/nestjs/src/docs.spec.ts`, `packages/nestjs/src/packaging.spec.ts` |
 | Fences | Rules that ordinary work can break without noticing: a package's allowed dependencies and imports, Node-only types in core, the shape of a runtime app | `packages/*/src/package-boundary.spec.ts`, `packages/core/src/runtime-portability.spec.ts` |
 
@@ -65,22 +65,23 @@ A behaviour tested at two layers costs two edits on every change. Keep it at the
 The three invariants in `AGENTS.md` get the strongest tests in the suite.
 
 - Each invariant is tested at every layer it lives in: the engine, the shared handlers, and each framework package on all five routes.
-- Inputs are adversarial, with more than one sample. For the UI that means close tags in any case and with whitespace (`</SCRIPT >`), channel names that need URL encoding, and output that contains HTML.
-- Assertions run on the parsed result (the number of `<script>` elements, the DOM nodes created), never on the presence of a string.
+- Inputs are adversarial, with more than one sample. For the UI that means close tags in any case, with whitespace or self-closing (`</SCRIPT >`, `</ScRiPt/>`), channel names that need URL encoding, and output that contains HTML.
+- Assertions run on the parsed result, never on the presence of a string. `packages/core/src/ui/repl-ui.spec.ts` loads the page in jsdom with the network and Monaco stubbed, then counts `<script>` elements, looks for injected nodes and reads the URLs the script used.
 
 ## Types
 
-`npm run typecheck` covers specs, test helpers and examples, not only the build sources. A public export renamed in the code but still used under its old name in a spec or an example must fail the typecheck.
+`npm run typecheck` covers specs, test helpers and examples, not only the build sources (each package's `tsconfig.typecheck.json`). A public export renamed in the code but still used under its old name in a spec or an example fails the typecheck.
 
-`expectTypeOf` does nothing at runtime ([Vitest](https://v2.vitest.dev/api/expect-typeof)). Type assertions go in `*.test-d.ts` files, run with `vitest --typecheck`.
+`expectTypeOf` does nothing at runtime ([Vitest](https://v2.vitest.dev/api/expect-typeof)). The typecheck is what checks it, so a type assertion lives in a spec the typecheck covers, like `packages/core/src/protocol/options.spec.ts`.
 
 ## Docs and skills
 
 Docs and skills are tested against the code, never for wording.
 
-- Every TypeScript code fence that imports a repo package compiles against the built `dist` types, so a renamed export or option turns it red.
+- Every TypeScript code fence that imports a repo package compiles against the packages' public barrels, so a renamed export or option turns it red (`packages/nestjs/src/docs.spec.ts`).
 - Every repo path a doc names exists.
-- Expected values come from the code. To check that a skill shows the completion event, capture the real event from an engine run and look for that JSON.
+- Expected values come from the code. The README options table must state `REMOTE_REPL_DEFAULTS`; every SSE `data:` sample in the docs must validate against the protocol schema, which a real engine run also validates against.
+- The migration tables map each legacy name to the export it really aliases (`packages/nestjs-web-repl/src/shim.spec.ts`).
 - The two NestJS skills share two sections byte for byte, and a test keeps the copies equal.
 
 Headings, word lists and section order are editorial choices. Reviewers check them; the suite does not.
@@ -97,16 +98,18 @@ Headings, word lists and section order are editorial choices. Reviewers check th
 | A test that reads private fields through `as any` | Pins the implementation and keeps engine members off `#private` | An assertion on the observable outcome |
 | One behaviour pinned in several specs | One change, many red tests | One test, at the owning layer |
 
+## Supported versions
+
+A declared range is tested at both ends.
+
+- **Express `^4.16 || ^5`.** The router and `createRemoteRepl` suites run once per major inside `npm test` (the `express4` alias devDependency).
+- **NestJS `^10 || ^11`.** The dev install is 11. The `nestjs-10` CI job installs 10 through root `overrides` and runs the NestJS packages' typecheck and suites.
+- **Runtimes.** Node 22, 24 and 26, Bun and Deno run the consumer apps under `runtime-tests/` (ADR 0006).
+
+Only the Express platform of NestJS is supported. On `@nestjs/platform-fastify` the module fails at boot, so no test claims it.
+
 ## Out of scope by design
 
-- **A real Redis server.** CI runs no services (ADR 0006). The transports run against `ioredis-mock` and a fake node-redis client. A type-level test checks that the real client types satisfy the `*Like` interfaces.
+- **A real Redis server.** CI runs no services (ADR 0006). The transports run against `ioredis-mock` and a fake node-redis client, and `packages/redis/src/client-types.spec.ts` checks that the real client types satisfy the `*Like` interfaces.
 - **One-off decisions.** ADRs record them.
-
-## Open decisions
-
-This section lists what the draft leaves open. Remove each item once it is decided.
-
-- **Where repo-level checks live.** The docs, CI and workspace checks sit in `packages/nestjs/src/` today. A root Vitest project is the alternative.
-- **New devDependencies.** publint and `@arethetypeswrong/cli` for artifacts; an HTML parser or DOM for the UI tests; a headless browser for one end-to-end UI test.
-- **Fastify.** `AGENTS.md` says the NestJS package works on Fastify, and the #50 audit found that it fails at boot. Either add a Fastify leg or remove the claim.
-- **NestJS 10.** The peer range includes it and no leg runs it. Either add a leg (like the `express4` alias) or narrow the range.
+- **A browser.** No end-to-end test drives the UI in a real browser yet. Until one does, `packages/core/src/ui/repl-ui.spec.ts` keeps its checks on the mobile-layout CSS (#10) and the jsdom tests cover the security invariant.

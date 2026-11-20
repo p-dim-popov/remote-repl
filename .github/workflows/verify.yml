@@ -2,12 +2,13 @@ name: Verify
 
 # The verification module (ADR 0006). This is the ONLY place the recipe
 # exists: pr.yml calls it on every pull request, release.yml calls it on every
-# push to main and publishes only behind it. Two suites, two jobs, two
-# questions, no Redis anywhere:
+# push to main and publishes only behind it. No Redis anywhere:
 #  - dev:     the contributor's laptop in CI (Node from mise.toml). Typecheck,
-#             schema check, build and `npm test`: the unit + integration
-#             suite, nothing skips, no Docker.
+#             schema check, build, the packed-package check and `npm test`:
+#             the unit + integration suite, nothing skips, no Docker.
 #             "Does `npm test` pass on the dev Node?"
+#  - nestjs-10: the NestJS packages' suites with NestJS 10 installed, the
+#             lower bound of their peer range.
 #  - runtime: every supported runtime. Build, then `npm run test:runtime`:
 #             the consumer apps under runtime-tests/* against the built dist/.
 #             "Can an app on this runtime use what we ship?" All legs block.
@@ -34,8 +35,34 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check the packed packages (publint, attw)
+        # Packs every package and checks what npm would ship: entry points
+        # and exports resolve under node10, node16 and bundler resolution.
+        run: npm run check:packages
+
       - name: Test (unit + integration, zero skips)
         run: npm test
+
+  # The NestJS packages' peers are `^10 || ^11`; the dev install is 11. Root
+  # overrides swap every @nestjs package to 10 in place, keeping one hoisted
+  # copy (two copies of @nestjs/core break DI: two ModuleRef classes).
+  nestjs-10:
+    name: nestjs 10 (lower peer bound)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Install NestJS 10
+        run: |
+          npm pkg set 'overrides.@nestjs/common=^10' 'overrides.@nestjs/core=^10' 'overrides.@nestjs/platform-express=^10' 'overrides.@nestjs/testing=^10'
+          npm install --no-audit --no-fund
+
+      - name: Typecheck (NestJS packages)
+        run: npm run typecheck --workspace @remote-repl/nestjs --workspace nestjs-web-repl
+
+      - name: Test (NestJS packages)
+        run: npm test --workspace @remote-repl/nestjs --workspace nestjs-web-repl
 
   runtime:
     name: runtime (${{ matrix.runtime }})

@@ -20,8 +20,7 @@ behind the split are in `docs/adr/`. Use the glossary's terms in code, tests
 and issues. Every export of an `@remote-repl/*` package is qualified
 (`RemoteRepl*`, `REMOTE_REPL_*`, `createRemoteRepl*`) and the words "web
 repl" and "adapter" do not appear in those four packages in any spelling
-(ADR 0005; guarded by the vocabulary spec in
-`packages/nestjs/src/packaging.spec.ts`).
+(ADR 0005).
 **The endpoints execute arbitrary code by design.** Treat every change through
 that lens — see "Security invariants" below.
 
@@ -40,9 +39,11 @@ apps under `runtime-tests/*` define none of those three scripts, see
 - Run tests: `npm test` (Vitest — unit specs under `packages/*/src/`, e2e under
   `packages/nestjs/test/`). This is the unit + integration suite: dev Node
   only, no Docker, no Redis, nothing skips. Multi-instance behaviour is
-  pinned on the in-memory transport in `packages/nestjs/test/`; the Redis
+  pinned on the in-memory transport in `packages/core/src/engine/` (the
+  lease) and `packages/nestjs/test/` (over HTTP + SSE); the Redis
   transports' topic prefix is pinned over `ioredis-mock` in
-  `packages/redis/src/prefix-isolation.spec.ts`.
+  `packages/redis/src/prefix-isolation.spec.ts`. What to test, and how to
+  check that a test can fail, is `TESTING.md`.
 - Runtime suite: `npm run test:runtime -- <vitest command>` runs
   `scripts/runtime-tests.mjs`, a short loop that runs the given command in
   each consumer app under `runtime-tests/*` (see "Runtime support"). The
@@ -55,7 +56,11 @@ apps under `runtime-tests/*` define none of those three scripts, see
   produce `dist/index.js` and `dist/index.d.ts`; `packages/nestjs-web-repl`
   (the shim) those plus `dist/redis.js` + `dist/redis.d.ts`, its `./redis`
   subpath)
-- Typecheck only: `npm run typecheck`
+- Typecheck only: `npm run typecheck` (sources, specs, test helpers and
+  examples: each package's `tsconfig.typecheck.json`)
+- Packed-package check: `npm run check:packages`, after a build. Packs each
+  package and runs publint and `attw --pack` on the tarball (entry points,
+  exports and `typesVersions` resolve under node10, node16 and bundler).
 - Protocol schema drift check: `npm run schema:check` (regenerates
   `packages/core/schema/protocol.schema.json` from the TS types and diffs)
 - Run the examples: `npm run example` (NestJS) and `npm run example:express`
@@ -84,15 +89,13 @@ script does exactly that first (a `node -e` `fs.rmSync`, cross-platform):
 `tsc -b` is incremental and never removes the output of a deleted source, so
 without the wipe a removed file's `dist/*.js` would ship. `tsc -b --clean`
 is no substitute (it only knows outputs of sources that still exist).
-`packages/nestjs/src/packaging.spec.ts` checks, when a `dist/` exists (CI
-builds before testing), that no built output lacks a source. Copy this pattern for any new
-package. `unplugin-swc` reads the package's `tsconfig.json` for
+Copy this pattern for any new package. `unplugin-swc` reads the package's `tsconfig.json` for
 `experimentalDecorators`: a package whose specs use Nest decorators needs
 them there, not only in the typecheck config.
 
-The full suite, `npm run build`, the typecheck and `npm run schema:check` (the
-protocol schema drift check) must all be green before you consider a change
-complete.
+The full suite, `npm run build`, the typecheck, `npm run schema:check` (the
+protocol schema drift check) and `npm run check:packages` must all be green
+before you consider a change complete.
 
 ## Runtime support (standing rule)
 
@@ -102,7 +105,10 @@ complete.
   `release.yml` calls it on every push to `main` and publishes only behind
   it. Two suites, each with one home and one command. Its `dev` job is the
   contributor's laptop: the Node from `mise.toml`, typecheck, schema check,
-  build and plain `npm test` (unit + integration, zero skips, no Docker).
+  build, the packed-package check and plain `npm test` (unit + integration,
+  zero skips, no Docker). Its `nestjs-10` job runs the NestJS packages'
+  suites and typecheck with NestJS 10 installed, the lower bound of their
+  `^10 || ^11` peers.
   Its `runtime` matrix builds, then runs ONLY the runtime suite on each
   runtime through `npm run test:runtime -- <vitest command>`, because the
   root `npm test` would run vitest under Node: `bun --bun x vitest run` (the
@@ -123,8 +129,8 @@ complete.
   consumer (the suite goes red when `dist/` is missing). Vitest runs
   in-process under the given runtime; the app listens on a real port and the
   scenarios use the global `fetch` over HTTP: the session-layer scenarios
-  (multi-line input, top-level `await`, a synchronous throw followed by a
-  working next command), `app` in the context, `Last-Event-ID` replay, the UI page and one Monaco
+  (multi-line input, top-level `await`, incomplete input, a synchronous
+  throw followed by a working next command), `app` in the context, `Last-Event-ID` replay, the UI page and one Monaco
   asset byte-compared with `dist/ui/vs`, and a disabled engine answering 404
   on every route. Each app is `private`, unscoped, defines a `probe` script
   and never `build`, `test` or `typecheck` (pinned by
@@ -134,8 +140,7 @@ complete.
   starts under the runtime being probed. Add a new runtime app by copying
   `runtime-tests/express-app`. Apps are `private`, and `.changeset/config.json`
   sets `privatePackages: { version: false, tag: false }`, so changesets
-  never versions or tags them (no per-app `ignore` entry; the shim's
-  packaging spec keeps `ignore` empty).
+  never versions or tags them (no per-app `ignore` entry).
 - **Failure attribution.** The session-layer scenarios sit under a describe
   named for the seam, `session layer (packages/core/src/session/)`: a red
   one on some runtime means the `node:repl` parity the session relies on
@@ -146,7 +151,8 @@ complete.
   engine is untouched). A red scenario outside that describe is attributed
   elsewhere.
 - **Portability fences.** `packages/core/src/runtime-portability.spec.ts`
-  forbids the `NodeJS.*` type namespace in core sources (use
+  forbids the `NodeJS.*` type namespace in core's emitted declarations,
+  what a Bun or Deno consumer compiles against (use
   `ReturnType<typeof setTimeout>`); `src/ui/monaco-assets.ts` guards
   `__dirname` / `require.resolve` and returns null (asset 404) when neither
   a bundled `vs` copy nor the package resolver is available. Keep new core
@@ -171,11 +177,14 @@ runtime pin), `scripts/runtime-tests.mjs` (the runtime suite loop),
 starts the engine at construction), `docs/agents/` (agent
 workflow notes), `skills/` (consumer-facing agent skills, see below) and
 `examples/stackblitz/` (a standalone demo against the published package, not
-a workspace). `packages/nestjs/src/docs.spec.ts` checks that every path
-`README.md`, `AGENTS.md` and `CONTRIBUTING.md` reference exists, that
-`GLOSSARY.md` defines the core terms and that the ADRs have Context /
-Decision / Consequences — when you move a file, fix the docs in the same
-change or that spec goes red. Packages live under `packages/`:
+a workspace). `packages/nestjs/src/docs.spec.ts` checks the docs against the
+tree and the code: every path `README.md`, `AGENTS.md`, `CONTRIBUTING.md` and
+`TESTING.md` reference exists (a package-relative path under a
+`` - `packages/<name>/` `` item must exist in that package), every TS code
+sample that imports a repo package compiles against the public barrels, and
+the README options table states the real defaults. When you move a file or
+rename an export or option, fix the docs in the same change or that spec
+goes red. Packages live under `packages/`:
 
 - `packages/core/` — `@remote-repl/core`: everything with NO framework dependency. Its
   `package.json` has zero `@nestjs/*`, express, redis/ioredis or rxjs
@@ -244,9 +253,11 @@ change or that spec goes red. Packages live under `packages/`:
   - `scripts/copy-monaco.mjs` — build step. Finds `monaco-editor` through
     Node's resolver (`createRequire`), never a hardcoded `node_modules` path.
 - `packages/redis/` — `@remote-repl/redis`: the Redis transports. Depends on `@remote-repl/core`
-  (the `RemoteReplTransport` interface) and nothing else; `ioredis` and `redis` are
-  OPTIONAL peers (pinned by `src/package-boundary.spec.ts`, which also
-  forbids `@nestjs/*`, express, rxjs). No decorators, no swc, no
+  (the `RemoteReplTransport` interface) and nothing else (pinned by
+  `src/package-boundary.spec.ts`, which also forbids `@nestjs/*`, express,
+  rxjs); `ioredis` and `redis` are OPTIONAL peers, and devDependencies only
+  for `src/client-types.spec.ts`, which checks that the real clients' types
+  satisfy the `*Like` interfaces. No decorators, no swc, no
   `reflect-metadata`. Paths relative to it:
   - `src/base-redis.transport.ts` — `RemoteReplBaseRedisTransport`: handler
     fan-out, subscribe once per topic, handler-fault isolation (a throwing
@@ -333,9 +344,9 @@ change or that spec goes red. Packages live under `packages/`:
   core. Exports the DI tokens `REMOTE_REPL_OPTIONS`, `REMOTE_REPL_TRANSPORT`,
   `REMOTE_REPL_CLOCK`. It exports ONLY its own API: no `./redis`
   subpath, no `typesVersions`, no redis-client peers (`src/packaging.spec.ts`
-  pins that, together with `files: ["dist"]`, the absence of a `bin` in every
-  workspace package, the workspace layout, the `runtime-tests/*` glob and
-  the `skills/` frontmatter). It has no devDependency on `@remote-repl/redis`
+  pins the dependencies, ADR 0001; it also holds the repo-level checks:
+  every workspace package's tarball contents, the runtime apps' shape and
+  the `skills/` frontmatter and shared sections). It has no devDependency on `@remote-repl/redis`
   or `@remote-repl/express`: nothing in its tests needs a Redis transport or
   an Express host. rxjs is a peer of THIS package (the Observable adaptation
   lives here), never of core. Paths below are relative to it.
@@ -346,10 +357,10 @@ change or that spec goes red. Packages live under `packages/`:
     rejection from `dispatch()`, a synchronous throw from `stream()`), and
     `stream()` as an RxJS `Observable` over the engine's `openStream()`
     (kept for consumers and its spec; the controller consumes `events()`
-    through the shared handlers instead). No engine logic lives here. `src/remote-repl.service.spec.ts` is the
-    behaviour-preservation gate for the engine extraction: it reaches
-    engine internals by name (`channels`, `ownership`, `onCmd`, …), so the
-    engine's members stay plain TS `private`, never `#private`.
+    through the shared handlers instead). No engine logic lives here, and
+    `src/remote-repl.service.spec.ts` covers only what the service adds
+    (the `stream()` Observable and its teardown, the `NotFoundException`
+    mapping); the engine's behaviour is specified in core's engine spec.
   - `src/remote-repl.controller.ts` — thin HTTP wiring over core's
     `createRemoteReplHandlers(service, options)`: Nest params in, core errors out
     (`RemoteReplDisabledError` → `NotFoundException`, `RemoteReplInvalidCommandError` →
@@ -370,8 +381,7 @@ change or that spec goes red. Packages live under `packages/`:
     `RemoteReplModuleExtras`. `src/constants.ts` — the Nest DI tokens only.
   - `example/` — a runnable host app. `test/` — the multi-instance e2e
     specs, two real, listening Nest apps on one in-memory transport:
-    `test/multi-instance.e2e.spec.ts` is the minimal cross-instance proof
-    and `test/multi-instance.scenarios.e2e.spec.ts` pins the observable
+    `test/multi-instance.scenarios.e2e.spec.ts` pins the observable
     multi-instance behaviour at the HTTP + SSE seam (ownership and single
     execution, a live owner is never preempted, takeover after the lease
     expires, `Last-Event-ID` replay, idle reconnect replays nothing,
@@ -397,13 +407,13 @@ change or that spec goes red. Packages live under `packages/`:
   `./redis` subpath, with a `typesVersions` fallback) does the same over
   `@remote-repl/redis`. No runtime deprecation warning. Depends on
   `@remote-repl/nestjs` and `@remote-repl/redis` with `^1.0.0` ranges; its
-  `version` is its OWN 2.x line, not lockstep (pinned by
-  `src/packaging.spec.ts`, together with the exports map, the NestJS/rxjs
-  peers, the optional `ioredis`/`redis` peers, `files: ["dist"]`, the absence
-  of a `bin` and the tarball contents). Ships its own `README.md` (with the
-  old → new migration table) and `LICENSE` because root files are not packed.
-  `src/shim.spec.ts` pins alias identity and emits the shim's declarations to
-  check that every legacy name carries `@deprecated` in the `.d.ts`;
+  `version` is its OWN 2.x line, not lockstep. Its peers may widen but never
+  narrow: `src/packaging.spec.ts` checks that they still accept every 2.3.x
+  peer range. Ships its own `README.md` (with the old → new migration table)
+  and `LICENSE` because root files are not packed. `src/shim.spec.ts` pins
+  alias identity, checks both migration tables (this README's and the root
+  README's) against the real aliases, and emits the shim's declarations to
+  check that the `@deprecated` tags survive into the `.d.ts`;
   `test/shim-app.e2e.spec.ts` boots a legacy consumer app with the `adapter`
   extra in every DI form plus `registerAsync`. No `bin` (see `CHANGELOG.md`;
   skills install via skills.sh, see `skills/` below).
@@ -423,9 +433,12 @@ change or that spec goes red. Packages live under `packages/`:
   (re-run the examples when you change those tables). The two NestJS skills
   share their "Security first" and "Use it" sections byte for byte: edit the
   text in one, copy it to the other. When a package's public API or package
-  name changes, update the matching skill in the same change.
-  `packages/nestjs/src/packaging.spec.ts` pins the three directories, their
-  frontmatter, key content and the shared sections.
+  name changes, update the matching skill in the same change: its TS code
+  sample compiles against the public API (`packages/nestjs/src/docs.spec.ts`)
+  and its SSE `data:` samples validate against the protocol schema
+  (`packages/core/src/protocol/schema.spec.ts`).
+  `packages/nestjs/src/packaging.spec.ts` checks each skill's frontmatter
+  and the two shared sections.
 
 ## Conventions
 
@@ -456,8 +469,7 @@ change or that spec goes red. Packages live under `packages/`:
   PR publishes to npm. Versions are decoupled (ADR 0005): no `fixed` or
   `linked` group. The four `@remote-repl` packages started at 1.0.0 (set by
   hand once, before the first publish — the one allowed hand edit) and
-  `nestjs-web-repl` stays on its own 2.x line with `^1.0.0` ranges on them
-  (asserted by `packages/nestjs-web-repl/src/packaging.spec.ts`).
+  `nestjs-web-repl` stays on its own 2.x line with `^1.0.0` ranges on them.
   `updateInternalDependencies: patch` rewrites the internal ranges when a
   dependency bumps. A never-published package needs no changeset:
   `changeset publish` ships every workspace package whose version is absent
@@ -521,8 +533,8 @@ must re-announce `claim` every `ownerHeartbeatInterval` (the engine's
 injectable `clock` constructor argument — `REMOTE_REPL_CLOCK` in the Nest
 package — drives `ownerSeenAt` timestamps so tests can control
 staleness deterministically — see `remote-repl-engine.spec.ts`'s
-`makeSharedClock` and `remote-repl.service.spec.ts`'s `makeServiceWithClock`
-helpers). If no claim/heartbeat has been seen for a
+`makeSharedClock`, and its `makeNetwork`, which kills an instance the way a
+crash does). If no claim/heartbeat has been seen for a
 channel's recorded owner within `ownerLeaseTtl`, `onCmd` treats it as
 effectively ownerless and lets the ORIGIN instance of the next command for it
 take over (fresh session; the dead owner's variables are gone). A live,
@@ -534,11 +546,11 @@ jitter measured on a PEER's clock, so a single heartbeat delivered late could
 make a live owner look stale to someone else and get preempted. The 2x
 margin guarantees a live owner always has at least one full heartbeat
 interval of slack. If you touch this
-logic, re-run the `owner-liveness` describe blocks of
-`packages/core/src/engine/remote-repl-engine.spec.ts` and
-`packages/nestjs/src/remote-repl.service.spec.ts` a few times to confirm they
-aren't flaky — staleness is all driven by the injected clock, not real
-waits, so they should never be.
+logic, re-run the `owner-liveness` describe block of
+`packages/core/src/engine/remote-repl-engine.spec.ts` a few times to confirm
+it isn't flaky — staleness is all driven by the injected clock, not real
+waits, so it should never be. Each of its tests reads who executed a
+command from the `command` echo's `instanceId`, and how many times.
 
 ## Provenance
 
