@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@remote-repl/core": "^1.1.0",
-    "@remote-repl/express": "^1.1.0",
+    "@remote-repl/express": "^1.2.0",
     "express": "^5"
   },
   "devDependencies": {
