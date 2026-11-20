@@ -54,7 +54,9 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "ioredis": "^5.11.1",
     "ioredis-mock": "^8.13.1",
+    "redis": "^5.12.4",
     "typescript": "^5",
     "vitest": "^2"
   }

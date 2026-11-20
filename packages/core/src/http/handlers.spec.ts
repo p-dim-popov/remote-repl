@@ -118,7 +118,7 @@ const engineWithEvents = (events: readonly RemoteReplEvent[]) => {
         for (const e of events) yield e;
       })();
       const originalReturn = iter.return.bind(iter);
-      iter.return = (v?: unknown) => {
+      iter.return = (v) => {
         returned();
         return originalReturn(v);
       };

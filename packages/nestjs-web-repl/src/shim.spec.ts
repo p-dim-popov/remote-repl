@@ -45,32 +45,43 @@ describe('nestjs-web-repl legacy aliases', () => {
   });
 });
 
-// The deprecation must reach the consumer's editor: every legacy name carries
-// a JSDoc `@deprecated` tag in the EMITTED declarations, not only in source.
-describe('nestjs-web-repl emitted declarations', () => {
-  const LEGACY_INDEX = [
-    'WebReplModule',
-    'WebReplController',
-    'WebReplService',
-    'InMemoryWebReplAdapter',
-    'WEB_REPL_OPTIONS',
-    'WebReplAdapter',
-    'WebReplModuleOptions',
-    'WebReplModuleExtras',
-    'WebReplAdapterConfig',
-    'WebReplEvent',
-    'SseEventType',
-  ];
-  const LEGACY_REDIS = [
-    'IoRedisWebReplAdapter',
-    'NodeRedisWebReplAdapter',
-    'BaseRedisWebReplAdapter',
-    'RedisWebReplAdapterOptions',
-    'RedisWebReplLogger',
-    'IoRedisLike',
-    'NodeRedisLike',
-  ];
+// The migration tables (this package's README and the root README) tell a
+// reader which new name replaces each legacy one. Every runtime row must name
+// the export the legacy alias really is, and every legacy runtime export of
+// the shim must have a row in this package's table.
+describe('nestjs-web-repl migration tables', () => {
+  const legacy = { ...shim, ...shimRedis } as Record<string, unknown>;
+  const current = { ...nestjsPkg, ...redisPkg } as Record<string, unknown>;
+  const rows = (rel: string) =>
+    readFileSync(join(process.cwd(), rel), 'utf8')
+      .split('\n')
+      .map((line) => line.match(/^\|\s*`(\w+)`\s*\|\s*`(\w+)`/))
+      .filter((m): m is RegExpMatchArray => m !== null && m[1] in legacy)
+      .map((m) => [m[1], m[2]] as const);
+  const isNew = (key: string) => /^(RemoteRepl|REMOTE_REPL_)/.test(key);
 
+  it.each(['README.md', '../../README.md'])('%s maps each legacy runtime name to the export it aliases', (rel) => {
+    const table = rows(rel);
+    expect(table.length).toBeGreaterThan(0);
+    for (const [old, replacement] of table) {
+      expect(current[replacement], `${old} -> ${replacement}`).toBeDefined();
+      // WebReplModule is the one alias with logic: it delegates to RemoteReplModule.
+      if (old === 'WebReplModule') expect(shim.WebReplModule.register({ enabled: false }).module).toBe(current[replacement]);
+      else expect(legacy[old], `${old} -> ${replacement}`).toBe(current[replacement]);
+    }
+  });
+
+  it('README.md has a row for every legacy runtime export', () => {
+    const listed = rows('README.md').map(([old]) => old);
+    expect(Object.keys(legacy).filter((key) => !isNew(key)).sort()).toEqual([...new Set(listed)].sort());
+  });
+});
+
+// The deprecation must reach the consumer's editor: the legacy names carry a
+// JSDoc `@deprecated` tag in the EMITTED declarations, not only in source. A
+// build-config change (`removeComments`, a bundler) would strip every tag at
+// once, so one check per entry point is enough.
+describe('nestjs-web-repl emitted declarations', () => {
   // Emit declarations for the shim's sources alone (siblings resolve through
   // the typecheck `paths`, so no prior build is needed).
   const outDir = mkdtempSync(join(tmpdir(), 'nestjs-web-repl-dts-'));
@@ -83,24 +94,8 @@ describe('nestjs-web-repl emitted declarations', () => {
   }, 120_000);
 
   const declared = (file: string) => readFileSync(join(outDir, 'nestjs-web-repl', 'src', file), 'utf8');
-  // The JSDoc block that precedes the `export` of `name`.
-  const docOf = (dts: string, name: string): string | undefined => {
-    const re = new RegExp(`\\/\\*\\*([\\s\\S]*?)\\*\\/\\s*export [^;{]*\\b${name}\\b`, 'g');
-    const m = re.exec(dts);
-    return m?.[1];
-  };
 
-  it.each(LEGACY_INDEX)('index.d.ts marks %s @deprecated with its replacement', (name) => {
-    const doc = docOf(declared('index.d.ts'), name);
-    expect(doc, `${name} has no JSDoc`).toBeDefined();
-    expect(doc).toMatch(/@deprecated/);
-    expect(doc).toMatch(/RemoteRepl|REMOTE_REPL/);
-  });
-
-  it.each(LEGACY_REDIS)('redis.d.ts marks %s @deprecated with its replacement', (name) => {
-    const doc = docOf(declared('redis.d.ts'), name);
-    expect(doc, `${name} has no JSDoc`).toBeDefined();
-    expect(doc).toMatch(/@deprecated/);
-    expect(doc).toMatch(/RemoteRepl/);
+  it.each(['index.d.ts', 'redis.d.ts'])('%s keeps the @deprecated tags of the legacy names', (file) => {
+    expect(declared(file)).toMatch(/\/\*\*[^]*?@deprecated[^]*?\*\/\s*export /);
   });
 });
